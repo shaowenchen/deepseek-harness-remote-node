@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Report privately through GitHub's
-[private vulnerability reporting](https://github.com/shaowenchen/dsh-remote-node/security/advisories/new)
+[private vulnerability reporting](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new)
 (**Security** tab → **Report a vulnerability**). Please do not open a public
 issue for a suspected vulnerability.
 

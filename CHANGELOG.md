@@ -14,8 +14,9 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Corrected the repository URL to `dsh-remote-node` (the package previously
-  pointed at a name that does not exist).
+- Corrected the repository URL: the package pointed at `dsh-remote-node`, a name
+  that does not exist. The repository was later renamed to
+  `deepseek-harness-remote-node`, and every reference follows it.
 - Documented that the node channel **does not verify credentials**, in the
   README and `scripts/install-host.sh`. The install script previously implied
   that any non-empty credential was accepted, when in fact the `credential`
@@ -105,5 +106,5 @@ and language servers still run wherever the subprocess provider points. The agen
 advertises only what it implements, so a host refuses those operations early with
 `unsupported` rather than hanging on them.
 
-[Unreleased]: https://github.com/shaowenchen/dsh-remote-node/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/shaowenchen/dsh-remote-node/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shaowenchen/deepseek-harness-remote-node/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/shaowenchen/deepseek-harness-remote-node/releases/tag/v0.1.0

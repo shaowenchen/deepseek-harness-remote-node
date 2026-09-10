@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the dsh-remote-node plugin into a local dsh profile.
+# Install the deepseek-harness-remote-node plugin into a local dsh profile.
 #
 # Sources the plugin straight from GitHub, so no clone is needed. Every step is
 # idempotent, so this doubles as the upgrade path: re-run it to pick up a newer
@@ -23,9 +23,9 @@
 # deepseek-harness-web container, which ships Node but no package manager.
 set -eu
 
-REPO_URL="https://github.com/shaowenchen/dsh-remote-node"
+REPO_URL="https://github.com/shaowenchen/deepseek-harness-remote-node"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
-CACHE_DIR="${DSH_NODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/dsh-remote-node}"
+CACHE_DIR="${DSH_NODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/deepseek-harness-remote-node}"
 WORKSPACE_CWD=""
 REF="master"
 SOURCE_DIR=""
@@ -87,7 +87,7 @@ else
   [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=/srv/workspace
 fi
 
-say "dsh-remote-node installer"
+say "deepseek-harness-remote-node installer"
 say "  source:  $SRC_KIND"
 say "  package: $PKG_DIR"
 say "  profile: $PROFILE_DIR"

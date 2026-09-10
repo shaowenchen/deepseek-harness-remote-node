@@ -12,7 +12,7 @@ body:
         vocabulary is stable without promising work the node cannot do.
 
         Also worth reading first: the
-        [design document](https://github.com/shaowenchen/dsh-remote-node/blob/master/2026-09-11-remote-node-execution-world.md),
+        [design document](https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/2026-09-11-remote-node-execution-world.md),
         which records what v1 deliberately does not do and why.
 
   - type: textarea

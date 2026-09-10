@@ -2,11 +2,11 @@ blank_issues_enabled: true
 
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/shaowenchen/dsh-remote-node/security/advisories/new
+    url: https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new
     about: Please report vulnerabilities privately, never in a public issue.
   - name: Read the design document
-    url: https://github.com/shaowenchen/dsh-remote-node/blob/master/2026-09-11-remote-node-execution-world.md
+    url: https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/2026-09-11-remote-node-execution-world.md
     about: Protocol, lifecycle, sandbox, security boundary, and phased implementation.
   - name: Known limitations
-    url: https://github.com/shaowenchen/dsh-remote-node/blob/master/SECURITY.md
+    url: https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/SECURITY.md
     about: The node channel does not verify credentials yet, and other documented gaps. Please check here before filing.

@@ -24,7 +24,7 @@ npm install @shaowenchen/dsh-node
 
 The package ships a [cordis](https://github.com/deepseek-ai/cordis) bundle patch,
 so a dsh deployment can mount it directly. See the
-[main README](https://github.com/shaowenchen/dsh-remote-node#readme) for the
+[main README](https://github.com/shaowenchen/deepseek-harness-remote-node#readme) for the
 full install path, including `scripts/install-host.sh` for container
 deployments where no package manager is available.
 
@@ -61,7 +61,7 @@ field is sent on the wire but is **not verified** by the registry, and the
 version and the single-slot rule. Do not expose `/node/v1` beyond a trusted
 network.
 
-See [SECURITY.md](https://github.com/shaowenchen/dsh-remote-node/blob/master/SECURITY.md)
+See [SECURITY.md](https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/SECURITY.md)
 for the full boundary description and reporting process.
 
 ## Status
@@ -74,4 +74,4 @@ rather than hanging on them.
 
 ## License
 
-MIT © Shaowen Chen — see [LICENSE](https://github.com/shaowenchen/dsh-remote-node/blob/master/LICENSE).
+MIT © Shaowen Chen — see [LICENSE](https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/LICENSE).

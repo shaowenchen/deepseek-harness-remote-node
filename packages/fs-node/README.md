@@ -93,7 +93,7 @@ the channel. What the deployment's isolation gives you is what the agent gets.
 Paths are resolved on the node against its own namespace and are **not confined
 to `cwd`**: the working directory is a resolution default, not a jail.
 
-See [SECURITY.md](https://github.com/shaowenchen/dsh-remote-node/blob/master/SECURITY.md).
+See [SECURITY.md](https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/SECURITY.md).
 
 ## Status
 

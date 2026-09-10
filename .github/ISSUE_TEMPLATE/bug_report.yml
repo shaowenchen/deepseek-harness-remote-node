@@ -7,8 +7,8 @@ body:
     attributes:
       value: |
         Thanks for the report. Please **do not** file security issues here —
-        use the [private vulnerability report](https://github.com/shaowenchen/dsh-remote-node/security/advisories/new)
-        instead, and check [SECURITY.md](https://github.com/shaowenchen/dsh-remote-node/blob/master/SECURITY.md)
+        use the [private vulnerability report](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new)
+        instead, and check [SECURITY.md](https://github.com/shaowenchen/deepseek-harness-remote-node/blob/master/SECURITY.md)
         for the documented known limitations first.
 
   - type: textarea

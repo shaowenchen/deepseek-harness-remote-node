@@ -1,6 +1,6 @@
-# dsh-remote-node
+# deepseek-harness-remote-node
 
-[![CI](https://github.com/shaowenchen/dsh-remote-node/actions/workflows/ci.yml/badge.svg)](https://github.com/shaowenchen/dsh-remote-node/actions/workflows/ci.yml)
+[![CI](https://github.com/shaowenchen/deepseek-harness-remote-node/actions/workflows/ci.yml/badge.svg)](https://github.com/shaowenchen/deepseek-harness-remote-node/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Turn a **remote machine** into a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
@@ -134,7 +134,7 @@ Until they are:
 See [SECURITY.md](SECURITY.md) for the full boundary description, the other
 known limitations, and a deployment checklist. To report a vulnerability, use
 GitHub's [private vulnerability
-reporting](https://github.com/shaowenchen/dsh-remote-node/security/advisories/new) —
+reporting](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new) —
 not a public issue.
 
 ## Install
@@ -149,7 +149,7 @@ Run this on the machine running dsh. It downloads the plugin, builds it, symlink
 it into the profile, and registers the `node-registry` row:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/dsh-remote-node/master/scripts/install-host.sh \
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
   | sh -s -- --cwd /srv/workspace
 ```
 
@@ -185,15 +185,15 @@ dsh loads out-of-tree plugins through its **user patch layer**, so no package
 manager is needed inside the deployment container. Fetch the source first:
 
 ```sh
-curl -fsSL https://github.com/shaowenchen/dsh-remote-node/archive/master.tar.gz \
-  | tar -xz -C /opt && mv /opt/dsh-remote-node-master /opt/dsh-remote-node
+curl -fsSL https://github.com/shaowenchen/deepseek-harness-remote-node/archive/master.tar.gz \
+  | tar -xz -C /opt && mv /opt/deepseek-harness-remote-node-master /opt/deepseek-harness-remote-node
 
-cd /opt/dsh-remote-node/packages/node && npm ci && npm run build
+cd /opt/deepseek-harness-remote-node/packages/node && npm ci && npm run build
 
 DSH_HOME=~/.dsh
 SCOPE="$DSH_HOME/profiles/web/node_modules/@shaowenchen"
 mkdir -p "$SCOPE"
-ln -sfn /opt/dsh-remote-node/packages/node "$SCOPE/dsh-node"
+ln -sfn /opt/deepseek-harness-remote-node/packages/node "$SCOPE/dsh-node"
 ```
 
 The scope directory is `@shaowenchen`, matching the package name — a symlink into
@@ -221,7 +221,7 @@ different machine — the whole point is that the agent's filesystem work happen
 there, not on the host.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/dsh-remote-node/master/scripts/install-node.sh \
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
   | sh -s --
 ```
 

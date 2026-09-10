@@ -4,9 +4,9 @@
   "description": "Turn a remote machine into a DeepSeek Harness (dsh) execution world: the node dials into dsh, no inbound port needed",
   "license": "MIT",
   "author": "Shaowen Chen <mail@chenshaowen.com>",
-  "homepage": "https://github.com/shaowenchen/dsh-remote-node#readme",
+  "homepage": "https://github.com/shaowenchen/deepseek-harness-remote-node#readme",
   "bugs": {
-    "url": "https://github.com/shaowenchen/dsh-remote-node/issues"
+    "url": "https://github.com/shaowenchen/deepseek-harness-remote-node/issues"
   },
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shaowenchen/dsh-remote-node.git",
+    "url": "git+https://github.com/shaowenchen/deepseek-harness-remote-node.git",
     "directory": "packages/node"
   },
   "publishConfig": {
