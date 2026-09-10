@@ -34,6 +34,12 @@ import {
 
 export * from './protocol.ts'
 
+// The agent is exported from the package root as well as being the `dsh-node`
+// binary: this package ships both halves of the channel, and an embedder that
+// wants to drive an agent in-process (a test, or a supervisor) should not have
+// to reach through a private path to do it.
+export * from './agent.ts'
+
 /** Plugin configuration. */
 export interface Config {
   /** Upgrade path the owner claims. @default '/node/v1' */

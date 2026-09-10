@@ -17,10 +17,11 @@ No inbound port. No public address. No NAT traversal on the remote side.
 
 | | |
 |---|---|
-| ✅ **Works** | Channel, registration, heartbeat, fail-closed semantics, and nine of the ten `fs.*` operations — tested end-to-end against a real HTTP server, real upgrades, and real sockets. |
-| ❌ **Not implemented** | `fs.editText`, the whole `proc.*` family (commands), and the whole `tty.*` family (terminals). |
-| 🚧 **Next** | `dsh-fs-node` and `dsh-subprocess-node` — the two adapters that map `ctx.fs` / `ctx.subprocess` onto this protocol. |
-| ⚠️ **Not published** | The npm package is **not on the registry yet**. Install from a checkout (see [Install](#install)). |
+| ✅ **Works** | Channel, registration, heartbeat, fail-closed semantics, and the full `fs.*` operation family — tested end-to-end against a real HTTP server, real upgrades, and real sockets. |
+| ✅ **Works** | **`@shaowenchen/dsh-fs-node`** — the adapter that serves `ctx.fs` from the node, so the agent's file operations actually happen there. Its behaviour is verified against the real local backend. |
+| ❌ **Not implemented** | The whole `proc.*` family (commands) and `tty.*` family (terminals), and the `dsh-subprocess-node` adapter that would consume them. |
+| 🚧 **Next** | `dsh-subprocess-node`, so commands, terminals, and language servers run on the node too. |
+| ⚠️ **Not published** | Neither package is **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
 
 The agent advertises only what it implements, so the host refuses unimplemented
 operations early with `unsupported` rather than hanging on them — see
@@ -293,17 +294,25 @@ packages/node/                      # the published package: @shaowenchen/dsh-no
 │   ├── protocol.ts                 # frame types, operation vocabulary, failure codes
 │   ├── index.ts                    # NodeRegistry (ctx.nodeRegistry): channel, identity, heartbeat
 │   ├── agent.ts                    # NodeAgent: the dialling process, on the remote machine
-│   ├── fs-ops.ts                   # filesystem operations, executed on the node
+│   ├── fs-ops.ts                   # filesystem semantics, executed on the node
 │   └── agent-cli.ts                # the `dsh-node` entry point
 ├── tests/
 │   └── fail-closed.spec.ts
 └── cordis.patch.yml                # the bundle patch a dsh deployment mounts
+
+packages/fs-node/                   # @shaowenchen/dsh-fs-node
+├── src/index.ts                    # NodeFileSystem: implements ctx.fs over the channel
+└── tests/parity.spec.ts            # checked against the real dsh-fs-local
 
 scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
 scripts/install-node.sh             # remote-machine agent installer, same idea
 2026-09-11-remote-node-execution-world.md   # design document
 SECURITY.md · CONTRIBUTING.md · CHANGELOG.md
 ```
+
+`dsh-subprocess-node` — the adapter that maps `ctx.subprocess` onto this
+protocol, so commands, terminals, and language servers also run on the node — is
+the next step and is specified in the design document.
 
 ## Design document
 

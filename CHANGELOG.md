@@ -58,6 +58,38 @@ against a real HTTP server, real upgrades, and real sockets.
 - `scripts/install-host.sh` — idempotent installer for a local dsh profile,
   usable in the `deepseek-harness-web` container where no package manager exists.
 
+### Added
+
+- **`@shaowenchen/dsh-fs-node`** — the adapter that serves `ctx.fs` from the
+  node, so the agent's file operations actually happen on the remote machine.
+  Its behaviour is verified against the real `@deepseek-ai/dsh-fs-local` over
+  the same operations (`tests/parity.spec.ts`), including error codes, listing
+  order, CRLF preservation through an edit, and `readBytes` caps.
+- **The full `fs.*` surface on the node** — targets carry a realpath-derived
+  identity (`fs.resolve`), metadata carries a freshness token (`fs.stat`,
+  `fs.lstat`), and `readBytes` carries its own cap so an unbounded file can
+  never be buffered across the wire.
+- **Guarded mutations on the node** — `fs.writeText` takes a
+  `createIfAbsent`/`replaceIfVersion` intent and `fs.editText` performs literal
+  search/replace, both checking the guard inside the critical section that
+  publishes. A version token derived from device, inode, size, and
+  nanosecond-resolution mtime/ctime is what a guard compares against.
+- `scripts/install-node.sh` — installs the agent on a remote machine straight
+  from GitHub, and both installers now download by default, so neither side
+  needs a clone.
+- `fs.contains` and `fs.paths` — containment, and the process path / `file:` URL
+  facts only the node can answer.
+
+### Changed
+
+- `fs.copy` and `fs.remove` are no longer in the operation vocabulary. They were
+  never part of the `FileSystem` seam, and shimming them over the generic
+  protocol would have been a second, drifting implementation of semantics the
+  seam does not define.
+- The node's failure codes now mirror `FsErrorCode` **by name** so a code
+  crosses the wire unchanged. Upstream branches on these codes, so a lossy
+  mapping would make the remote world behave differently from the local one.
+
 ### Security
 
 - Known and documented: **the node channel does not authenticate its peers.**
@@ -67,9 +99,11 @@ against a real HTTP server, real upgrades, and real sockets.
 
 ### Not implemented
 
-`fs.editText`, `proc.*`, and `tty.*` are declared in the protocol vocabulary but
-not implemented. The agent advertises only what it implements, so a host refuses
-those operations early with `unsupported` rather than hanging on them.
+`proc.*` and `tty.*` are declared in the protocol vocabulary but not
+implemented, and there is no `dsh-subprocess-node` yet — so commands, terminals,
+and language servers still run wherever the subprocess provider points. The agent
+advertises only what it implements, so a host refuses those operations early with
+`unsupported` rather than hanging on them.
 
 [Unreleased]: https://github.com/shaowenchen/dsh-remote-node/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/shaowenchen/dsh-remote-node/releases/tag/v0.1.0

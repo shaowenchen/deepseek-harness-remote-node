@@ -128,6 +128,11 @@ export type NodeFrame = AgentFrame | HostFrame
  * `fs.*` maps onto `ctx.fs`; `proc.*` and `tty.*` map onto `ctx.subprocess`.
  * There is no `node.*` control operation here — registration and liveness are
  * connection-level concerns, not streams.
+ *
+ * The `fs.*` set is shaped by `FileSystem` rather than by convenience: targets
+ * are resolved separately from use, guards and edits are their own operations
+ * so they can run in one critical section ON the node, and `readBytes` carries
+ * its own cap so an unbounded file can never be buffered across the wire.
  */
 export type NodeOperation =
   // ── filesystem (ctx.fs) ──
@@ -136,11 +141,12 @@ export type NodeOperation =
   | 'fs.lstat'
   | 'fs.readText'
   | 'fs.streamText'
+  | 'fs.readBytes'
   | 'fs.writeText'
   | 'fs.editText'
   | 'fs.list'
-  | 'fs.copy'
-  | 'fs.remove'
+  | 'fs.contains'
+  | 'fs.paths'
   // ── ordinary processes (ctx.subprocess.spawn) ──
   | 'proc.resolve'
   | 'proc.spawn'

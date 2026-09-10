@@ -106,8 +106,24 @@ Source imports carry explicit `.ts` extensions (`./agent.ts`) and include the
 4. Test it through a real registered agent, asserting both the success path and
    its failure codes.
 
-Operations are added to the agent first; the `dsh-fs-node` /
-`dsh-subprocess-node` adapters that consume them live in the main repository.
+Operations are added to the agent first, then consumed by an adapter in
+`packages/fs-node` (or its `subprocess` sibling when it exists). Adding one is
+three edits, not one: the protocol vocabulary, the node-side implementation, and
+the adapter method that forwards it.
+
+### The adapter must not drift from the node
+
+`packages/fs-node` claims that `ctx.fs` behaves the same served remotely as it
+does locally, and `tests/parity.spec.ts` holds it to that by running the same
+operations against the real `@deepseek-ai/dsh-fs-local` and comparing what a
+caller observes. When you change a filesystem semantic, change it in both
+places and let the parity suite prove they still agree — an assertion here is
+worth more than a matching comment.
+
+Guards stay on the node. `writeText` and `editText` are single operations
+because the version check has to happen in the same critical section as the
+publication; splitting one into a host-side stat plus a write reintroduces the
+race the guard exists to close, and the parity suite will not catch it.
 
 ## Security
 

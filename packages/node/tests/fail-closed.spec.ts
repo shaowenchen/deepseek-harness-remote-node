@@ -203,6 +203,15 @@ describe('fail-closed: an absent node is never the host', () => {
   })
 })
 
+/** Resolve a path through the node, returning its stable target key. */
+async function keyOf(
+  node: { invoke: <T>(op: never, args: unknown) => Promise<T> },
+  path: string,
+): Promise<string> {
+  const resolved = await node.invoke<{ targetKey: string }>('fs.resolve' as never, { path })
+  return resolved.targetKey
+}
+
 describe('single-slot registration', () => {
   it('refuses a second node while one is registered', async () => {
     await mount()
@@ -302,34 +311,193 @@ describe('agent integration', () => {
       await waitFor(() => ctx.nodeRegistry.current !== undefined, 'the agent to register')
       const node = ctx.nodeRegistry
 
+      // Resolve, then address the target by key: resolution is its own step so
+      // identity is established once and reused, not re-derived per operation.
+      const resolved = await node.invoke<{ targetKey: string; displayPath: string }>(
+        'fs.resolve', { path: join(world, 'sub/out.txt') },
+      )
+      assert.equal(resolved.displayPath, join(world, 'sub/out.txt'))
+
       // Write, then read back: the content must be what the NODE stored.
-      await node.invoke('fs.writeText', { path: join(world, 'sub/out.txt'), content: 'hello from the host' })
-      const read = await node.invoke<string>('fs.readText', { path: join(world, 'sub/out.txt') })
+      const written = await node.invoke<{ operation: string; after: string }>('fs.writeText', {
+        targetKey: resolved.targetKey, displayPath: resolved.displayPath, content: 'hello from the host',
+      })
+      assert.equal(written.operation, 'create', 'a new file is a create')
+      assert.equal(written.after, 'hello from the host')
+
+      const read = await node.invoke<string>(
+        'fs.readText', { targetKey: resolved.targetKey, displayPath: resolved.displayPath },
+      )
       assert.equal(read, 'hello from the host')
 
-      // Listing is content-free and stably ordered.
-      const entries = await node.invoke<Array<{ name: string; kind: string }>>('fs.list', { path: world })
+      // A second write reports an update and carries the previous content as
+      // the contextual-diff basis.
+      const rewritten = await node.invoke<{ operation: string; before: string | null }>('fs.writeText', {
+        targetKey: resolved.targetKey, displayPath: resolved.displayPath, content: 'second write',
+      })
+      assert.equal(rewritten.operation, 'update')
+      assert.equal(rewritten.before, 'hello from the host', 'the diff basis is the previous content')
+
+      // Listing is content-free, stably ordered, and returns resolved children.
+      const entries = await node.invoke<Array<{ name: string; type: string }>>(
+        'fs.list', { targetKey: await keyOf(node, world), displayPath: world },
+      )
       assert.deepEqual(
         entries.map((entry) => entry.name),
         ['data.txt', 'sub'],
         'entries must be sorted by name',
       )
-      assert.equal(entries.find((entry) => entry.name === 'sub')?.kind, 'directory')
+      assert.equal(entries.find((entry) => entry.name === 'sub')?.type, 'directory')
 
-      // A stat reports the facts the local backend would report.
-      const info = await node.invoke<{ kind: string; text: boolean; size: number }>(
-        'fs.stat', { path: join(world, 'data.txt') },
+      // A stat reports the facts the local backend would report, plus the
+      // version a guarded write compares against.
+      const info = await node.invoke<{ type: string; size: number; version: string }>(
+        'fs.stat', { targetKey: await keyOf(node, join(world, 'data.txt')) },
       )
-      assert.equal(info.kind, 'file')
-      assert.equal(info.text, true)
+      assert.equal(info.type, 'file')
       assert.equal(info.size, 12)
+      assert.ok(info.version.length > 0, 'a stat must carry a freshness token')
 
-      // A missing target is `not-found`, not an internal error.
+      // Absence from `stat` is `undefined` — a caller legitimately probes for a
+      // target that does not exist yet…
+      assert.equal(await node.invoke('fs.stat', { targetKey: join(world, 'nope.txt') }), undefined)
+
+      // …but a read of a missing file is `FS_NOT_FOUND`, since the file is
+      // required for the operation to mean anything.
       await assert.rejects(
-        () => node.invoke('fs.readText', { path: join(world, 'nope.txt') }),
+        () => node.invoke('fs.readText', { targetKey: join(world, 'nope.txt'), displayPath: join(world, 'nope.txt') }),
         (error: unknown) => {
           assert.ok(error instanceof NodeError)
-          assert.equal(error.code, 'not-found')
+          assert.equal(error.code, 'FS_NOT_FOUND')
+          return true
+        },
+      )
+    } finally {
+      agent.stop()
+    }
+  })
+
+  it('enforces write guards on the node, where the file actually is', async () => {
+    await mount()
+    const agent = new NodeAgent({
+      url: `ws://127.0.0.1:${port}/node/v1`,
+      nodeId: 'agent-05',
+      credential: 'test-credential',
+      cwd: world,
+    })
+    agent.start()
+    try {
+      await waitFor(() => ctx.nodeRegistry.current !== undefined, 'the agent to register')
+      const node = ctx.nodeRegistry
+      const path = join(world, 'guarded.txt')
+      const key = await keyOf(node, path)
+
+      // createIfAbsent succeeds once, then refuses. The guard is checked ON the
+      // node immediately before publication, so no window exists between the
+      // check and the write for another writer to slip through.
+      await node.invoke('fs.writeText', {
+        targetKey: key, displayPath: path, content: 'first', expected: { kind: 'createIfAbsent' },
+      })
+      await assert.rejects(
+        () => node.invoke('fs.writeText', {
+          targetKey: key, displayPath: path, content: 'second', expected: { kind: 'createIfAbsent' },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof NodeError)
+          assert.equal(error.code, 'FS_NOT_OBSERVED', 'creating over an existing file must refuse')
+          return true
+        },
+      )
+
+      // replaceIfVersion passes against the current version and refuses a stale
+      // one — the mechanism that prevents a lost update.
+      const info = await node.invoke<{ version: string }>('fs.stat', { targetKey: key })
+      await node.invoke('fs.writeText', {
+        targetKey: key, displayPath: path, content: 'third',
+        expected: { kind: 'replaceIfVersion', version: info.version },
+      })
+      await assert.rejects(
+        () => node.invoke('fs.writeText', {
+          targetKey: key, displayPath: path, content: 'fourth',
+          expected: { kind: 'replaceIfVersion', version: info.version },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof NodeError)
+          assert.equal(error.code, 'FS_STALE_VERSION', 'a stale version must refuse the write')
+          return true
+        },
+      )
+      // The refusal left the guarded write's content intact, not clobbered.
+      assert.equal(await node.invoke<string>('fs.readText', { targetKey: key, displayPath: path }), 'third')
+    } finally {
+      agent.stop()
+    }
+  })
+
+  it('edits literal text on the node and refuses an ambiguous match', async () => {
+    await mount()
+    const agent = new NodeAgent({
+      url: `ws://127.0.0.1:${port}/node/v1`,
+      nodeId: 'agent-06',
+      credential: 'test-credential',
+      cwd: world,
+    })
+    agent.start()
+    try {
+      await waitFor(() => ctx.nodeRegistry.current !== undefined, 'the agent to register')
+      const node = ctx.nodeRegistry
+      const path = join(world, 'edit.txt')
+      const key = await keyOf(node, path)
+      await node.invoke('fs.writeText', {
+        targetKey: key, displayPath: path, content: 'alpha\nbeta\nalpha\n',
+      })
+
+      // Two matches without replaceAll is refused rather than guessed at:
+      // silently editing the first is how a model corrupts a file it misread.
+      await assert.rejects(
+        () => node.invoke('fs.editText', {
+          targetKey: key, displayPath: path,
+          edit: { oldString: 'alpha', newString: 'gamma', replaceAll: false },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof NodeError)
+          assert.equal(error.code, 'FS_AMBIGUOUS_EDIT')
+          return true
+        },
+      )
+
+      // A search string that is not there is a different, also-typed failure.
+      await assert.rejects(
+        () => node.invoke('fs.editText', {
+          targetKey: key, displayPath: path,
+          edit: { oldString: 'not-present', newString: 'x', replaceAll: false },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof NodeError)
+          assert.equal(error.code, 'FS_EDIT_NOT_FOUND')
+          return true
+        },
+      )
+
+      // replaceAll applies every match and reports both sides of the change.
+      const applied = await node.invoke<{ before: string; after: string }>('fs.editText', {
+        targetKey: key, displayPath: path,
+        edit: { oldString: 'alpha', newString: 'gamma', replaceAll: true },
+      })
+      assert.equal(applied.before, 'alpha\nbeta\nalpha\n')
+      assert.equal(applied.after, 'gamma\nbeta\ngamma\n')
+
+      // A stale version refuses BEFORE matching, so the caller learns the file
+      // moved rather than that their search text is now wrong.
+      await assert.rejects(
+        () => node.invoke('fs.editText', {
+          targetKey: key, displayPath: path,
+          edit: { oldString: 'gamma', newString: 'delta', replaceAll: false },
+          expected: { version: 'stale-version' },
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof NodeError)
+          assert.equal(error.code, 'FS_STALE_VERSION')
           return true
         },
       )

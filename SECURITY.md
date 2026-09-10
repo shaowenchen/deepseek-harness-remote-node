@@ -18,6 +18,10 @@ operations. The security boundary is therefore **the node channel**: anything
 that can complete a handshake on `/node/v1` becomes the execution world for the
 agent, and every file the agent reads or writes lands on that machine.
 
+`@shaowenchen/dsh-fs-node` is the consumer of that boundary: it serves `ctx.fs`
+from whichever node is connected, so mounting it is what makes the remote
+machine authoritative for file operations.
+
 The two properties the design deliberately enforces:
 
 - **Fail-closed.** An absent or disconnected node refuses every operation with

@@ -32,13 +32,15 @@ import {
 } from './protocol.ts'
 import {
   NodeOpError,
-  copyPath,
-  listDirectory,
-  readTextFile,
-  removePath,
-  resolvePath,
-  statPath,
-  writeTextFile,
+  containsPath,
+  editText,
+  listDir,
+  lstatPath,
+  readBytes,
+  readText,
+  resolveTarget,
+  statTarget,
+  writeText,
 } from './fs-ops.ts'
 
 /** Options for one agent connection. */
@@ -80,16 +82,21 @@ const IMPLEMENTED_OPERATIONS: string[] = [
   'fs.lstat',
   'fs.readText',
   'fs.streamText',
-  'fs.list',
+  'fs.readBytes',
   'fs.writeText',
-  'fs.copy',
-  'fs.remove',
+  'fs.editText',
+  'fs.list',
+  'fs.contains',
+  'fs.paths',
 ]
 
 /**
  * Implements one operation against the local machine.
  *
- * `fs.*` is implemented over `node:fs/promises`. `proc.*` and `tty.*` still
+ * `fs.*` is implemented over `node:fs/promises`, with the semantics of dsh's
+ * own local backend: targets carry a realpath-derived identity, mutations are
+ * atomic, and guards are checked here rather than by the host so the
+ * read→check→write window cannot be interleaved. `proc.*` and `tty.*` still
  * answer `unsupported`, honestly: a host that trusts the advertised
  * capabilities will refuse those early rather than hang on them.
  * @param op - the requested operation.
@@ -103,27 +110,64 @@ async function execute(
   cwd: string,
 ): Promise<unknown> {
   const a = (args ?? {}) as Record<string, never>
+  // Every fs.* operation addresses a target the host already resolved, so the
+  // display path travels with it rather than being re-derived here: the host
+  // chose it, and error messages must name the path the caller knows.
+  const targetKey = a['targetKey'] as never
+  const displayPath = (a['displayPath'] as never) ?? targetKey
 
   switch (op) {
     case 'fs.resolve':
-      return await resolvePath(a['path'] as never, cwd)
+      return await resolveTarget(cwd, a['path'] as never)
+
     case 'fs.stat':
-      return await statPath(a['path'] as never, true)
+      // Absence is `undefined`, not a failure: a caller legitimately probes for
+      // a target that is not there yet.
+      return await statTarget(targetKey as never)
+
     case 'fs.lstat':
-      return await statPath(a['path'] as never, false)
+      return await lstatPath(a['path'] as never, cwd)
+
     case 'fs.readText':
     case 'fs.streamText':
-      // Streaming is a payload-frame concern; P1 returns the whole text and
-      // the adapter chunks it. Correctness first, framing later.
-      return await readTextFile(a['path'] as never)
+      // Streaming is a payload-frame concern; this build returns the whole text
+      // and the adapter chunks it. Correctness first, framing later.
+      return await readText(targetKey as never, displayPath as never)
+
+    case 'fs.readBytes':
+      return await readBytes(targetKey as never, displayPath as never, Number(a['maxBytes']))
+
     case 'fs.list':
-      return await listDirectory(a['path'] as never)
+      return await listDir(targetKey as never, displayPath as never)
+
     case 'fs.writeText':
-      return await writeTextFile(a['path'] as never, a['content'] as never)
-    case 'fs.copy':
-      return await copyPath(a['from'] as never, a['to'] as never)
-    case 'fs.remove':
-      return await removePath(a['path'] as never, Boolean(a['recursive']))
+      return await writeText(
+        targetKey as never,
+        displayPath as never,
+        a['content'] as never,
+        a['expected'] as never,
+      )
+
+    case 'fs.editText':
+      return await editText(
+        targetKey as never,
+        displayPath as never,
+        a['edit'] as never,
+        a['expected'] as never,
+      )
+
+    case 'fs.contains':
+      return containsPath(a['parentKey'] as never, a['childKey'] as never)
+
+    case 'fs.paths':
+      // The facts only the node can answer: the absolute path a subprocess can
+      // open, and the canonical file: URL. Both are derived from the target key,
+      // which IS an absolute path in this world.
+      return {
+        processPath: String(targetKey),
+        fileUrl: new URL(`file://${String(targetKey)}`).href,
+      }
+
     default:
       throw new NodeOpError('unsupported', `agent does not implement ${op} yet`)
   }
