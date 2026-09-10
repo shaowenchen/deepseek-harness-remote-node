@@ -139,42 +139,64 @@ not a public issue.
 ## Install
 
 Node **22+** is required. The npm package is not published yet, so both sides
-install from a checkout.
+install straight from GitHub — no clone needed. Three steps: configure the dsh
+host, install the agent on the node, then use it.
 
-### On the host
+### 1. Configure the dsh host
 
-`scripts/install-host.sh` is the recommended path. Every step is idempotent, so
-it doubles as the upgrade path — re-run it after pulling a new revision.
+Run this on the machine running dsh. It downloads the plugin, builds it, symlinks
+it into the profile, and registers the `node-registry` row:
 
 ```sh
-git clone https://github.com/shaowenchen/dsh-remote-node
-cd dsh-remote-node
-./scripts/install-host.sh --cwd /srv/workspace            # add --dry-run to preview
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/dsh-remote-node/master/scripts/install-host.sh \
+  | sh -s -- --cwd /srv/workspace
 ```
 
-It builds the plugin, symlinks it into `$DSH_HOME/profiles/web/node_modules/`,
-and appends the `node-registry` row to that profile's patch layer. It also tells
-you the one step it deliberately leaves manual, because it is a decision rather
-than a default — see [Make the node
-authoritative](#make-the-node-authoritative).
+Add `--dry-run` to preview, `--ref <branch|tag|sha>` to pin a revision, or
+`--dsh-home <dir>` for a non-default dsh home. Every step is idempotent, so
+re-running it is the upgrade path.
+
+Then make the node authoritative. Exactly one execution world may exist;
+leaving the host's own filesystem provider mounted beside the node is a
+composition error, not a fallback.
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml — append
+- id: fs-sandbox
+  disabled: true
+```
+
+This is left manual on purpose: with it disabled, **every filesystem tool fails
+until a node connects**. That is fail-closed working as designed, but it means a
+host that boots without a node is a host whose agent cannot touch a filesystem —
+so it is your call, not an installer's.
+
+Verify the composition resolves without booting:
+
+```sh
+dsh --profile web --dump-config | grep -A4 node-registry
+```
 
 <details>
 <summary>Doing it by hand instead</summary>
 
 dsh loads out-of-tree plugins through its **user patch layer**, so no package
-manager is needed inside the deployment container.
+manager is needed inside the deployment container. Fetch the source first:
 
 ```sh
-cd packages/node && npm ci && npm run build && cd ../..
+curl -fsSL https://github.com/shaowenchen/dsh-remote-node/archive/master.tar.gz \
+  | tar -xz -C /opt && mv /opt/dsh-remote-node-master /opt/dsh-remote-node
+
+cd /opt/dsh-remote-node/packages/node && npm ci && npm run build
 
 DSH_HOME=~/.dsh
 SCOPE="$DSH_HOME/profiles/web/node_modules/@shaowenchen"
 mkdir -p "$SCOPE"
-ln -sfn "$PWD/packages/node" "$SCOPE/dsh-node"
+ln -sfn /opt/dsh-remote-node/packages/node "$SCOPE/dsh-node"
 ```
 
-Note the scope directory is `@shaowenchen`, matching the package name — a symlink
-into a scope directory that does not exist will fail.
+The scope directory is `@shaowenchen`, matching the package name — a symlink into
+a scope directory that does not exist will fail.
 
 Then append to `$DSH_HOME/profiles/web/cordis.patch.yml` (append; do not replace
 the file, it may carry unrelated patches):
@@ -191,89 +213,58 @@ the file, it may carry unrelated patches):
 
 </details>
 
-### On the remote machine
+### 2. Configure the node
 
-Same checkout, on the machine that will become the execution world:
-
-```sh
-git clone https://github.com/shaowenchen/dsh-remote-node
-cd dsh-remote-node/packages/node
-npm ci && npm run build
-npm link          # puts the `dsh-node` command on PATH (may need sudo)
-```
-
-If you would rather not touch the global prefix, skip `npm link` and run the
-built entry point directly — it is the same thing, from the `packages/node`
-directory the block above leaves you in:
+Run this **on the machine that will become the execution world**. It is a
+different machine — the whole point is that the agent's filesystem work happens
+there, not on the host.
 
 ```sh
-node lib/agent-cli.js --describe
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/dsh-remote-node/master/scripts/install-node.sh \
+  | sh -s --
 ```
 
-`dsh-node --describe` prints this machine's identity without connecting — useful
-to confirm the build works and to see what the host will be told.
+It checks for Node 22+, downloads and builds the agent, and puts a `dsh-node`
+command on your PATH (`/usr/local/bin` when writable, else `~/.local/bin`; the
+script tells you if it is not on your PATH). Add `--bin-dir <dir>` to choose,
+or `--ref <branch|tag|sha>` to pin a revision.
 
-### Make the node authoritative
-
-Exactly one execution world may exist. Leaving the host's own filesystem
-provider mounted beside the node is a composition error, not a fallback.
-
-```yaml
-# $DSH_HOME/profiles/web/cordis.patch.yml
-- id: fs-sandbox
-  disabled: true
-```
-
-This is left manual on purpose: with it disabled, **every filesystem tool fails
-until a node connects**. That is the fail-closed behaviour working as designed,
-but it means a host that boots without a node is a host whose agent cannot touch
-a filesystem — so it is your call to make, not an installer's.
-
-Verify the composition resolves without booting:
+Confirm the build works and see what the host will be told about this machine:
 
 ```sh
-dsh --profile web --dump-config | grep -A4 node-registry
+dsh-node --describe
 ```
 
-### Run it
+Run the agent as an unprivileged user, in a container or VM whose blast radius
+you accept — see [Security](#security).
+
+### 3. Run it
+
+Start the host first, then connect the node:
 
 ```sh
 # 1. on the host
 dsh web
 
-# 2. on the remote machine — loopback or trusted network
-dsh-node --url ws://your-host:3080/node/v1 --credential <token> --cwd /srv/workspace
-
-# 2'. behind a TLS-terminating proxy (see Reverse proxy below)
-dsh-node --url wss://your-host/node/v1 --credential <token> --cwd /srv/workspace
+# 2. on the node
+dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
 ```
 
 The agent logs `registered as <nodeId> (generation 1, cwd ...)` once the
-handshake completes, and reconnects with jittered backoff after a drop.
+handshake completes, and reconnects with jittered backoff after a drop. From
+then on the agent's file operations happen on the node.
 
 ```sh
 dsh-node --help        # all options
 dsh-node --describe    # identity, no connection
 ```
 
-## Reverse proxy
-
-dsh's HTTP carrier has no TLS, so terminate TLS at the proxy and **dial `wss://`
-from the node**:
-
-- pass WebSocket upgrade headers for `/node/v1`,
-- disable response buffering on that path,
-- set read/write timeouts **well above** `heartbeatIntervalMs` (default 2s), or
-  the proxy will sever a healthy connection. The interval is both the cadence
-  and the deadline: a peer that has not answered the previous ping by the next
-  interval is terminated.
-- rate-limit `/node/v1` separately.
-
-Node authentication is deliberately **not** the browser session cookie. That
-cookie is built for browsers (`HttpOnly`, `SameSite=Strict`, host-bound, and
-without `Secure` because the shipped transport is loopback HTTP) — it is the
-wrong tool for authenticating a machine. Nodes use their own long-lived bearer
-credential. **That credential is not verified yet** — see [Security](#security).
+If the host is not directly reachable, point `--url` at a TLS-terminating
+reverse proxy and dial `wss://` instead. That path needs WebSocket upgrade
+headers passed through, response buffering disabled, and read/write timeouts
+**well above** `heartbeatIntervalMs` (default 2s) — the interval is both the
+cadence and the deadline, so a shorter proxy timeout severs healthy
+connections.
 
 ## Development
 
@@ -308,7 +299,8 @@ packages/node/                      # the published package: @shaowenchen/dsh-no
 │   └── fail-closed.spec.ts
 └── cordis.patch.yml                # the bundle patch a dsh deployment mounts
 
-scripts/install-host.sh             # idempotent installer for a dsh profile
+scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
+scripts/install-node.sh             # remote-machine agent installer, same idea
 2026-09-11-remote-node-execution-world.md   # design document
 SECURITY.md · CONTRIBUTING.md · CHANGELOG.md
 ```
