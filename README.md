@@ -4,7 +4,7 @@ Turn a **remote machine** into a [DeepSeek Harness](https://github.com/deepseek-
 
 The remote machine dials **into** dsh over the web entry point dsh already exposes. From then on the agent's file reads, edits, shell commands, terminals, and language servers all happen on that machine — while the agent loop, model calls, session state, and plugins stay on the host. No inbound port, no public address, no NAT traversal on the remote side.
 
-> **Status: P0 + filesystem.** The channel, registration, heartbeat, fail-closed semantics, and the `fs.*` operation family are implemented and tested end-to-end against a running `dsh web`. Process and terminal operations are **not** implemented yet — the agent reports `unsupported` for them honestly rather than pretending.
+> **Status: P0 + filesystem.** The channel, registration, heartbeat, fail-closed semantics, and nine of the ten `fs.*` operations are implemented and tested end-to-end against a running `dsh web`. Not implemented yet: `fs.editText`, and the whole `proc.*` / `tty.*` families. The agent advertises only what it implements, so the host refuses those early with `unsupported` rather than pretending — see `IMPLEMENTED_OPERATIONS` in [`src/agent.ts`](packages/node/src/agent.ts).
 
 ## Why this shape
 
@@ -156,7 +156,7 @@ cd packages/node
 npm test
 ```
 
-12 cases over a real HTTP server, real upgrades, and real sockets — including the fail-closed suite and a filesystem round-trip driven by a real agent.
+12 cases over a real HTTP server, real upgrades, and real sockets — including the fail-closed suite and a filesystem round-trip driven by a real agent. CI runs the same `typecheck` / `test` / `build` sequence plus a CLI smoke test on every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ## Design document
 

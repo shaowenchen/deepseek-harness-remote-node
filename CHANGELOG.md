@@ -43,9 +43,10 @@ against a real HTTP server, real upgrades, and real sockets.
   Remote mux (`open` / `data` / `end` / `error` / `cancel`, a `ready` opening
   item, a generation number). Version mismatch is refused, not negotiated.
 - **`fs.*` operations** — `fs.resolve`, `fs.stat`, `fs.lstat`, `fs.readText`,
-  `fs.streamText`, `fs.writeText`, `fs.list`, `fs.copy`, `fs.remove`. Paths are
-  resolved on the node against its own namespace; the host never normalizes a
-  remote path.
+  `fs.streamText`, `fs.writeText`, `fs.list`, `fs.copy`, `fs.remove` are
+  implemented. `fs.editText` is declared in the protocol vocabulary but **not**
+  implemented. Paths are resolved on the node against its own namespace; the
+  host never normalizes a remote path.
 - **Fail-closed semantics** — a disconnected node rejects every in-flight
   operation with `disconnected` rather than leaving callers suspended, clears the
   registered node so the next call refuses, does **not** terminate node
@@ -66,8 +67,8 @@ against a real HTTP server, real upgrades, and real sockets.
 
 ### Not implemented
 
-`proc.*` and `tty.*` are declared in the protocol vocabulary but not
-implemented. The agent advertises only what it implements, so a host refuses
+`fs.editText`, `proc.*`, and `tty.*` are declared in the protocol vocabulary but
+not implemented. The agent advertises only what it implements, so a host refuses
 those operations early with `unsupported` rather than hanging on them.
 
 [Unreleased]: https://github.com/shaowenchen/dsh-remote-node/compare/v0.1.0...HEAD

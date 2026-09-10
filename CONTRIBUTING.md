@@ -56,9 +56,9 @@ implementation drifts — and a drifted list is worse than no list, since the ho
 would promise the model work the node cannot do. When you add an operation,
 update both, and have it answer `unsupported` until it genuinely works.
 
-`proc.*` and `tty.*` are currently declared in the protocol but deliberately
-**not** implemented. They exist so the vocabulary is stable, not as a promise.
-Do not advertise them until they work.
+`proc.*`, `tty.*`, and `fs.editText` are currently declared in the protocol but
+deliberately **not** implemented. They exist so the vocabulary is stable, not as
+a promise. Do not advertise them until they work.
 
 ## Code style
 
