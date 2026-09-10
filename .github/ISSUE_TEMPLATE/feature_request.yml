@@ -1,0 +1,58 @@
+name: Feature request
+description: Propose a change to the node channel, an operation, or the tooling
+title: '[Feature]: '
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing a new operation, note the rule the agent follows:
+        **advertise only what you implement.** `proc.*` and `tty.*` are declared
+        in the protocol vocabulary but deliberately not implemented, so the
+        vocabulary is stable without promising work the node cannot do.
+
+        Also worth reading first: the
+        [design document](https://github.com/shaowenchen/dsh-remote-node/blob/master/2026-09-11-remote-node-execution-world.md),
+        which records what v1 deliberately does not do and why.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can you not do today? Describe the situation, not the fix.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Filesystem operations (fs.*)
+        - Process operations (proc.*)
+        - Terminal operations (tty.*)
+        - Channel, lifecycle, or heartbeat
+        - Authentication or enrollment
+        - Adapters (dsh-fs-node / dsh-subprocess-node)
+        - Tooling, docs, or packaging
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: If you have one. Note any effect on the wire protocol.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints
+      options:
+        - label: This does not weaken fail-closed (a disconnected node must stay a failed world, never a host fallback).
+          required: true
+        - label: I am willing to open a pull request for this.
+          required: false

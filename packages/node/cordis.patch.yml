@@ -1,0 +1,21 @@
+# The @shaowenchen/dsh-node bundle patch: mounts the remote node channel.
+#
+# Applying this bundle inserts the node registry but leaves the host's own
+# execution world in place, so a node can connect and be inspected before
+# anything depends on it. Enabling it as THE execution world is a deliberate
+# second step — see the README:
+#
+#   - id: fs-sandbox
+#     disabled: true
+#
+# Exactly one execution world may exist. Disabling the local filesystem
+# provider is what makes the node authoritative rather than merely present;
+# leaving both mounted is a composition error, not a fallback.
+
+- insert:
+    - id: node-registry
+      name: '@shaowenchen/dsh-node'
+      config:
+        cwd: !!js process.env.DSH_NODE_CWD ?? process.cwd()
+        heartbeatIntervalMs: 2000
+        onDisconnect: orphan

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+lib/
+*.tsbuildinfo
+
+# Test scratch: local dsh installations and throwaway DSH_HOME profiles
+.itest/
+.dsh-test/
+.dsh-e2e/
+.dsh-fsonly/
+.dsh/
+
+# Local environment
+.env
+.env.local
+
+# Editor and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*

@@ -1,0 +1,81 @@
+{
+  "name": "@shaowenchen/dsh-node",
+  "version": "0.1.0",
+  "description": "Turn a remote machine into a DeepSeek Harness (dsh) execution world: the node dials into dsh, no inbound port needed",
+  "license": "MIT",
+  "author": "Shaowen Chen <mail@chenshaowen.com>",
+  "homepage": "https://github.com/shaowenchen/dsh-remote-node#readme",
+  "bugs": {
+    "url": "https://github.com/shaowenchen/dsh-remote-node/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "bin": {
+    "dsh-node": "lib/agent-cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-timeout=15000 \"tests/*.spec.ts\"",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "remote",
+    "node",
+    "execution-world",
+    "plugin",
+    "sandbox",
+    "websocket"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaowenchen/dsh-remote-node.git",
+    "directory": "packages/node"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.2",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.2-rc.1",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

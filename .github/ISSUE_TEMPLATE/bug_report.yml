@@ -1,0 +1,90 @@
+name: Bug report
+description: Something behaves differently than documented
+title: '[Bug]: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please **do not** file security issues here —
+        use the [private vulnerability report](https://github.com/shaowenchen/dsh-remote-node/security/advisories/new)
+        instead, and check [SECURITY.md](https://github.com/shaowenchen/dsh-remote-node/blob/master/SECURITY.md)
+        for the documented known limitations first.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest thing that shows the problem, as exact commands.
+      render: shell
+      placeholder: |
+        cd packages/node
+        npm ci && npm run build
+        dsh-node --url wss://host/node/v1 --credential test --cwd /srv/workspace
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: side
+    attributes:
+      label: Which side is involved
+      options:
+        - label: Harness host (`NodeRegistry`, the dsh deployment)
+        - label: Node agent (`dsh-node`, the remote machine)
+        - label: The wire protocol itself
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      description: The `@shaowenchen/dsh-node` version, or the commit you built from.
+      placeholder: 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      description: The output of `node --version`.
+      placeholder: v22.11.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: identity
+    attributes:
+      label: Agent identity
+      description: The output of `dsh-node --describe`, if a node agent is involved.
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output
+      description: |
+        Paste the actual output. If a `NodeError` was raised, its `code` matters
+        more than its message — `disconnected`, `unsupported`, `not-found`,
+        `policy`, `timeout`, `internal`, or `cancelled`.
+
+        For a channel problem, whether the agent logged a reconnect and how long
+        it took is usually the most useful detail.
+      render: shell
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before filing
+      options:
+        - label: I have read SECURITY.md and this is not one of the documented limitations.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

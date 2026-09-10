@@ -1,0 +1,17 @@
+# Normalize line endings. The node agent runs on remote machines that may be
+# Windows, so a checkout must not acquire CRLF for shell scripts or the CLI.
+* text=auto eol=lf
+
+# Shell scripts must keep LF even on a Windows checkout, or they will not run.
+*.sh text eol=lf
+
+# The CLI is invoked through its shebang; force LF so `#!/usr/bin/env node`
+# survives a checkout on any platform.
+packages/node/src/agent-cli.ts text eol=lf
+packages/node/lib/agent-cli.js text eol=lf
+
+# Lockfiles are generated and huge; keep them out of diffs and language stats.
+package-lock.json -diff linguist-generated=true
+
+# Build output is committed nowhere; make that explicit for archive exports.
+packages/node/lib/** linguist-generated=true
