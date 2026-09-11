@@ -199,9 +199,20 @@ elif grep -q 'node-registry' "$PATCH_FILE" 2>/dev/null; then
 else
   mkdir -p "$PROFILE_DIR"
   [ -f "$PATCH_FILE" ] || printf '[]\n' > "$PATCH_FILE"
-  # Turn a bare `[]` seed into a real list, otherwise append to it.
-  if [ "$(tr -d '[:space:]' < "$PATCH_FILE")" = "[]" ]; then
-    printf '' > "$PATCH_FILE"
+  # An untouched profile ships a COMMENTED header above a bare `[]`. That file
+  # is a valid empty list, but it cannot be appended to: a document may not hold
+  # both a top-level `[]` and a top-level `- insert:`, and dsh refuses to parse
+  # it. So the seed is replaced — but the header is kept, because it documents
+  # what this file is and dsh regenerates it anyway.
+  #
+  # Comments must be stripped before testing, which is the part that was wrong
+  # before: the old check compared the whole file (comments included) against
+  # `[]`, never matched, and appended straight onto the `[]` — producing a patch
+  # dsh could not parse, so the plugin silently never loaded.
+  if [ -z "$(sed 's/#.*//' "$PATCH_FILE" | tr -d '[:space:]' | sed 's/\[\]//')" ]; then
+    seed_tmp="$PATCH_FILE.tmp.$$"
+    grep '^#' "$PATCH_FILE" > "$seed_tmp" 2>/dev/null || true
+    mv "$seed_tmp" "$PATCH_FILE"
   fi
   {
     printf '\n# ── remote node execution world (added by scripts/install-host.sh) ──\n'
