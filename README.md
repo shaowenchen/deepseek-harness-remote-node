@@ -226,8 +226,10 @@ machine's identity without connecting.
 
 The credential must match the one in the host's plugin config. If you used
 `install-host.sh`, it generated one and printed it; the same value is in
-`$DSH_HOME/node-credential`. Both sides presenting nothing means the channel
-does not authenticate, and the host says so on every registration.
+`$DSH_HOME/node-credential`. A generated credential is 32 characters of
+`[A-Za-z0-9]`, which is short enough to paste here directly. Both sides
+presenting nothing means the channel does not authenticate, and the host says so
+on every registration.
 
 ### Removing it
 

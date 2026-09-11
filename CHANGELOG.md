@@ -28,10 +28,14 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and that check is a separate, very fast step that leaks the secret's LENGTH
   before an attacker starts on its bytes.
 
-  `scripts/install-host.sh` generates a credential with `openssl rand`, stores
-  it at `$DSH_HOME/node-credential` (0600), and reuses it on later runs so
+  `scripts/install-host.sh` generates a credential, stores it at
+  `$DSH_HOME/node-credential` (0600), and reuses it on later runs so
   re-installing never invalidates a node that is already connected.
-  `--credential` supplies one instead.
+  `--credential` supplies one instead. A generated value is 32 characters of
+  `[A-Za-z0-9]` with at least one upper-case letter, one lower-case letter, and
+  one digit, drawn from `/dev/urandom` — 62 symbols over 32 positions, about 190
+  bits, and short enough that an operator pastes it into `dsh-node --credential`
+  by hand rather than copying it between files.
 
   Still missing, and documented as such: no enrollment flow, no rotation, and no
   per-node identity — verification answers "is this the shared secret", not
