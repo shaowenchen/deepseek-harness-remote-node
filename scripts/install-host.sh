@@ -236,17 +236,125 @@ else
   say "      ok"
 fi
 
+# ── 5b. Refuse to leave the host in a crash loop ─────────────────────────────
+# A context holds exactly one ctx.fs and one ctx.subprocess. Mounting the node
+# adapters while the host's own providers are still enabled does not degrade to
+# "run it locally" — registration fails and the whole plugin tree refuses to
+# load, so dsh exits 1 and restarts forever. That failure is expensive to
+# diagnose from the outside: the only visible symptom is /node/v1 answering 404
+# (and a 502 through a proxy), which looks like a networking problem rather than
+# a composition one. So the composition is checked here, before the operator
+# concludes anything.
+#
+# `--dump-config` is NOT sufficient: it prints an entry even for a package that
+# cannot be imported, so it proves the YAML parses and nothing more. The check
+# below is about ids that are still ENABLED, which `--dump-config` does show
+# faithfully (a `disabled: true` line appears beside the entry).
+say "[4b/5] checking the composition can actually boot"
+# Find dsh. It is installed globally in the web container (that is how it is
+# launched), but a developer running this against a local profile may have it
+# only inside a node_modules tree — so PATH is tried first and a couple of
+# well-known npm global locations after it, rather than assuming.
+DSH_BIN=$(command -v dsh 2>/dev/null || true)
+if [ -z "$DSH_BIN" ]; then
+  for candidate in \
+    "${npm_config_prefix:-}/bin/dsh" \
+    /usr/local/bin/dsh \
+    /usr/bin/dsh \
+    "$HOME/.local/bin/dsh"
+  do
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then DSH_BIN="$candidate"; break; fi
+  done
+fi
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "      skipped (dry run)"
+elif [ -z "$DSH_BIN" ]; then
+  say "      !! could not find the dsh binary, so the composition was NOT checked."
+  say "         This check is what prevents a crash loop, so run it by hand:"
+  say ""
+  say "             dsh --profile web --dump-config | grep -E 'id: (fs-sandbox|subprocess)'"
+  say ""
+  say "         Each id that appears WITHOUT a following 'disabled: true' will"
+  say "         stop the host from booting. See the block printed below."
+else
+  dump_file="${TMPDIR:-/tmp}/dsh-host-dump.$$"
+  DSH_HOME="$DSH_HOME" "$DSH_BIN" --profile web --dump-config > "$dump_file" 2>/dev/null || true
+  # shellcheck disable=SC2064  # expand $$ now, so the trap removes THIS file
+  trap "rm -f '$dump_file'" EXIT INT TERM
+  if [ ! -s "$dump_file" ]; then
+    say "      could not read the composed config — check the patch by hand"
+    rm -f "$dump_file"
+  else
+    # For each host provider the node adapters replace, is it still enabled?
+    #
+    # The match is on the EXACT line `- id: <name>`, because `- id: subprocess`
+    # is a prefix of `- id: subprocess-node` and a looser match would read the
+    # node adapter's own entry as the host's.
+    #
+    # Exit codes: 0 disabled (fine), 1 enabled (conflict), 2 absent (not mounted
+    # by this profile at all — nothing to disable, and not our business).
+    still_enabled() {
+      awk -v want="$2" '
+        $0 == "- id: " want { found = 1; next }
+        found && /^- id: /  { exit }
+        found && /^[[:space:]]*disabled: true/ { off = 1 }
+        END { if (!found) exit 2; exit (off ? 0 : 1) }
+      ' "$1"
+    }
+    conflict=""
+    for id in fs-sandbox subprocess; do
+      # `set -e` is on, so the non-zero return must be captured, not tested.
+      code=0
+      still_enabled "$dump_file" "$id" || code=$?
+      if [ "$code" -eq 1 ]; then conflict="$conflict $id"; fi
+    done
+    if [ -n "$conflict" ]; then
+      say ""
+      say "  !! CONFLICT: these host providers are still enabled:$conflict"
+      say ""
+      say "  dsh will NOT boot in this state. Append the block below to"
+      say "  $PATCH_FILE and restart:"
+      say ""
+      say "      - id: fs-sandbox"
+      say "        disabled: true"
+      say "      - id: subprocess"
+      say "        disabled: true"
+      say ""
+      say "  Symptom if you skip it: dsh exits 1 in a restart loop with"
+      say "  'service \"subprocess\" has been registered', and /node/v1 answers"
+      say "  404 (or 502 behind a proxy) because the host never finished booting."
+      say ""
+      exit 1
+    fi
+    say "      ok — the node adapters can register"
+  fi
+fi
+
 # ── 6. Report what is still manual ───────────────────────────────────────────
 say "[5/5] done"
 say ""
-say "Next:"
-say "  Make the node authoritative by appending this to $PATCH_FILE."
+say "REQUIRED NEXT STEP — the host will NOT start without it."
 say ""
-say "  This is left to you on purpose rather than done above: disabling the"
-say "  host's own providers is a decision about THIS deployment, and doing it"
-say "  silently would stop the agent from working on the host at all the moment"
-say "  no node is connected. Until you append it, the host's own filesystem and"
-say "  subprocess providers still serve the agent."
+say "  Append the block below to $PATCH_FILE, then RESTART dsh."
+say ""
+say "  This is not optional and it is not a preference. A context may hold"
+say "  exactly one ctx.fs and one ctx.subprocess, and the host's own providers"
+say "  are mounted first — so leaving them in place makes the node adapters'"
+say "  registration fail and the whole plugin tree refuse to load:"
+say ""
+say "      service \"subprocess\" has been registered at <LocalSubprocessRuntime>"
+say ""
+say "  dsh then exits with code 1 and restarts in a loop. It does not fall"
+say "  back, and it does not run anything on the host in the meantime: there is"
+say "  no degraded mode here, only a host that cannot boot. (The earlier"
+say "  wording of this message claimed the host's providers would keep serving"
+say "  the agent until you appended the block. That was wrong, and it sent at"
+say "  least one deployment into a crash loop with a 404 on /node/v1.)"
+say ""
+say "  The consequence to accept knowingly: with the host's providers disabled,"
+say "  a node that is not connected means NO execution world at all. Every"
+say "  operation is refused with \`node is not connected\` rather than silently"
+say "  running on the host."
 say ""
 say "      - id: fs-sandbox"
 say "        disabled: true"
