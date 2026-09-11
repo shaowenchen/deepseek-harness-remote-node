@@ -30,7 +30,7 @@
  * itself. Confinement on a node is an OS-level property of how the agent runs
  * (an unprivileged user, a container), not something this adapter can enforce
  * from the host side. See SECURITY.md.
- * @module @shaowenchen/dsh-node/fs
+ * @module @shaowenchen/deepseek-harness-remote-node/fs
  */
 
 import type { Context } from '@deepseek-ai/cordis'

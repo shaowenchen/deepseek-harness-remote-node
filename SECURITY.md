@@ -18,7 +18,7 @@ operations. The security boundary is therefore **the node channel**: anything
 that can complete a handshake on `/node/v1` becomes the execution world for the
 agent, and every file the agent reads or writes lands on that machine.
 
-The `@shaowenchen/dsh-node/fs` and `@shaowenchen/dsh-node/subprocess` entry
+The `@shaowenchen/deepseek-harness-remote-node/fs` and `@shaowenchen/deepseek-harness-remote-node/subprocess` entry
 points are the consumers of that boundary: they serve `ctx.fs` and
 `ctx.subprocess` from whichever node is connected, so mounting them is what
 makes the remote machine authoritative for file operations and for running

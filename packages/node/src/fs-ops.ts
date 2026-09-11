@@ -20,7 +20,7 @@
  * normalizes, joins, or realpaths a remote path: it has no business knowing the
  * remote platform's rules, and would be wrong on the first Windows or
  * case-insensitive node.
- * @module @shaowenchen/dsh-node-agent/fs-ops
+ * @module @shaowenchen/deepseek-harness-remote-node-agent/fs-ops
  */
 
 import { constants } from 'node:fs'

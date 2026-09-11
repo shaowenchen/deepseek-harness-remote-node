@@ -8,7 +8,7 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The three packages are now one.** `@shaowenchen/dsh-node` carries all three
+- **The three packages are now one.** `@shaowenchen/deepseek-harness-remote-node` carries all three
   entry points — the registry at `.`, the filesystem adapter at `./fs`, and the
   subprocess adapter at `./subprocess` — so `@shaowenchen/dsh-fs-node` and
   `@shaowenchen/dsh-subprocess-node` no longer exist. Neither was ever
@@ -38,7 +38,7 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tty.close` are implemented. `tty.*` is advertised **only when a PTY substrate
   loads**, so a machine without a usable native build reports those operations as
   unimplemented instead of failing at the first terminal.
-- **The `ctx.subprocess` adapter** (entry point `@shaowenchen/dsh-node/subprocess`)
+- **The `ctx.subprocess` adapter** (entry point `@shaowenchen/deepseek-harness-remote-node/subprocess`)
   — serves commands, terminals, and language servers from the node. Its behaviour
   is verified against the real `@deepseek-ai/dsh-subprocess-local` over the same
   operations, including process trees, output caps, piped streams, and real

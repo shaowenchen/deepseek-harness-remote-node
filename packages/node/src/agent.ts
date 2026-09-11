@@ -16,7 +16,7 @@
  * 2. **It enforces its own sandbox.** Confinement is same-world only; a remote
  *    node replaces the capability rather than registering into `ctx.sandbox`.
  *    What this agent enforces is what the deployment gets.
- * @module @shaowenchen/dsh-node-agent
+ * @module @shaowenchen/deepseek-harness-remote-node-agent
  */
 
 import { hostname, platform, arch, homedir } from 'node:os'

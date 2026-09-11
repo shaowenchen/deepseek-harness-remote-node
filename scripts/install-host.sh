@@ -61,7 +61,10 @@ fi
 
 PROFILE_DIR="$DSH_HOME/profiles/web"
 SCOPE_DIR="$PROFILE_DIR/node_modules/@shaowenchen"
-LINK_PATH="$SCOPE_DIR/dsh-node"
+# The directory name is the package name, minus the scope. dsh resolves a
+# plugin by name from this directory, so they must match exactly — the `curl |
+# sh` path in the README creates the same layout by hand and says so.
+LINK_PATH="$SCOPE_DIR/deepseek-harness-remote-node"
 PATCH_FILE="$PROFILE_DIR/cordis.patch.yml"
 
 say() { printf '%s\n' "$*"; }
@@ -182,7 +185,7 @@ else
     printf '\n# ── remote node execution world (added by scripts/install-host.sh) ──\n'
     printf -- '- insert:\n'
     printf -- '    - id: node-registry\n'
-    printf -- "      name: '@shaowenchen/dsh-node'\n"
+    printf -- "      name: '@shaowenchen/deepseek-harness-remote-node'\n"
     printf -- '      config:\n'
     printf -- '        cwd: %s\n' "$WORKSPACE_CWD"
     printf -- '        heartbeatIntervalMs: 2000\n'
@@ -193,9 +196,9 @@ else
     # this same package, behind subpath entry points, so no second install is
     # involved.
     printf -- '    - id: fs-node\n'
-    printf -- "      name: '@shaowenchen/dsh-node/fs'\n"
+    printf -- "      name: '@shaowenchen/deepseek-harness-remote-node/fs'\n"
     printf -- '    - id: subprocess-node\n'
-    printf -- "      name: '@shaowenchen/dsh-node/subprocess'\n"
+    printf -- "      name: '@shaowenchen/deepseek-harness-remote-node/subprocess'\n"
   } >> "$PATCH_FILE"
   say "      ok"
 fi

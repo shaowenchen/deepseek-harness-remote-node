@@ -45,7 +45,7 @@ body:
     id: version
     attributes:
       label: Package version
-      description: The `@shaowenchen/dsh-node` version, or the commit you built from.
+      description: The `@shaowenchen/deepseek-harness-remote-node` version, or the commit you built from.
       placeholder: 0.1.0
     validations:
       required: true

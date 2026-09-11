@@ -1,4 +1,4 @@
-# The @shaowenchen/dsh-node bundle patch: mounts the remote node channel.
+# The @shaowenchen/deepseek-harness-remote-node bundle patch: mounts the remote node channel.
 #
 # Applying this bundle inserts the node registry but leaves the host's own
 # execution world in place, so a node can connect and be inspected before
@@ -16,9 +16,9 @@
 # mounting them needs no second install:
 #
 #   - id: fs-node
-#     name: '@shaowenchen/dsh-node/fs'
+#     name: '@shaowenchen/deepseek-harness-remote-node/fs'
 #   - id: subprocess-node
-#     name: '@shaowenchen/dsh-node/subprocess'
+#     name: '@shaowenchen/deepseek-harness-remote-node/subprocess'
 #
 # They are listed here as comments rather than mounted, because either one
 # taken alone changes where the agent's work happens, and that is a decision
@@ -26,7 +26,7 @@
 
 - insert:
     - id: node-registry
-      name: '@shaowenchen/dsh-node'
+      name: '@shaowenchen/deepseek-harness-remote-node'
       config:
         cwd: !!js process.env.DSH_NODE_CWD ?? process.cwd()
         heartbeatIntervalMs: 2000

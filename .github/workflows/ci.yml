@@ -65,9 +65,9 @@ jobs:
         run: |
           node -e "
           Promise.all([
-            import('@shaowenchen/dsh-node'),
-            import('@shaowenchen/dsh-node/fs'),
-            import('@shaowenchen/dsh-node/subprocess'),
+            import('@shaowenchen/deepseek-harness-remote-node'),
+            import('@shaowenchen/deepseek-harness-remote-node/fs'),
+            import('@shaowenchen/deepseek-harness-remote-node/subprocess'),
           ]).then(([root, fs, sub]) => {
             for (const [name, mod] of [['.', root], ['./fs', fs], ['./subprocess', sub]]) {
               if (typeof mod.default !== 'function') {

@@ -1,4 +1,4 @@
-# @shaowenchen/dsh-node
+# @shaowenchen/deepseek-harness-remote-node
 
 Turn a **remote machine** into a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 (`dsh`) execution world. The node dials **out** to the harness host over the Web
@@ -11,9 +11,9 @@ One package, three entry points. Install it once; mount what you need.
 
 | Entry point | Mounts | What it is |
 |---|---|---|
-| `@shaowenchen/dsh-node` | `ctx.nodeRegistry` | The host-side channel: identity, WebSocket, heartbeat, generation |
-| `@shaowenchen/dsh-node/fs` | `ctx.fs` | Filesystem adapter — file operations run on the node |
-| `@shaowenchen/dsh-node/subprocess` | `ctx.subprocess` | Process adapter — commands, terminals, and language servers run on the node |
+| `@shaowenchen/deepseek-harness-remote-node` | `ctx.nodeRegistry` | The host-side channel: identity, WebSocket, heartbeat, generation |
+| `@shaowenchen/deepseek-harness-remote-node/fs` | `ctx.fs` | Filesystem adapter — file operations run on the node |
+| `@shaowenchen/deepseek-harness-remote-node/subprocess` | `ctx.subprocess` | Process adapter — commands, terminals, and language servers run on the node |
 | — | — | plus the `dsh-node` bin, the agent that runs on the **remote** machine |
 
 The registry is the lifecycle owner; the two adapters are consumers of it, and
@@ -30,7 +30,7 @@ needs `dsh-subprocess` installed.
 ## Install
 
 ```sh
-npm install @shaowenchen/dsh-node
+npm install @shaowenchen/deepseek-harness-remote-node
 ```
 
 The package ships a [cordis](https://github.com/deepseek-ai/cordis) bundle patch,
@@ -44,15 +44,15 @@ deployments where no package manager is available.
 ```yaml
 - insert:
     - id: node-registry
-      name: '@shaowenchen/dsh-node'
+      name: '@shaowenchen/deepseek-harness-remote-node'
       config:
         cwd: /srv/workspace
         heartbeatIntervalMs: 2000
         onDisconnect: orphan
     - id: fs-node
-      name: '@shaowenchen/dsh-node/fs'
+      name: '@shaowenchen/deepseek-harness-remote-node/fs'
     - id: subprocess-node
-      name: '@shaowenchen/dsh-node/subprocess'
+      name: '@shaowenchen/deepseek-harness-remote-node/subprocess'
 
 # Exactly one execution world may exist. Leaving the host's own providers
 # mounted beside the node's is a composition error, not a fallback.

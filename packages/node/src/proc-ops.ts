@@ -29,7 +29,7 @@
  * reference to the socket. That is what lets a network blip leave a running
  * build alone, and it is why the host has to fail its own callers explicitly
  * rather than being told by the node that nothing is running any more.
- * @module @shaowenchen/dsh-node-agent/proc-ops
+ * @module @shaowenchen/deepseek-harness-remote-node-agent/proc-ops
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'

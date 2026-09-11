@@ -23,7 +23,7 @@
  * the OS by `@homebridge/node-pty-prebuilt-multiarch`-style inspection; where the
  * substrate cannot report it, this module falls back to pty-level signalling and
  * says so rather than inventing a group id.
- * @module @shaowenchen/dsh-node-agent/tty-ops
+ * @module @shaowenchen/deepseek-harness-remote-node-agent/tty-ops
  */
 
 import { NodeOpError } from './fs-ops.ts'

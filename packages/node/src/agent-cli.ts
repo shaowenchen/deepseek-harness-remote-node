@@ -4,7 +4,7 @@
  *
  * Kept as a thin argument parser over {@link NodeAgent}: the connection logic
  * lives in `agent.ts` so it can be embedded and tested without a process.
- * @module @shaowenchen/dsh-node-agent/cli
+ * @module @shaowenchen/deepseek-harness-remote-node-agent/cli
  */
 
 import { parseArgs } from 'node:util'

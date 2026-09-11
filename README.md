@@ -53,9 +53,9 @@ LSP.
         │    ├ /api/remote.mux   ← browser mux                  │
         │    └ /node/v1          ← node channel                 │
         │                                                       │
-        │  ctx.nodeRegistry ── @shaowenchen/dsh-node            │
-        │  ctx.fs ........... @shaowenchen/dsh-node/fs          │
-        │  ctx.subprocess ... @shaowenchen/dsh-node/subprocess  │
+        │  ctx.nodeRegistry ── @shaowenchen/deepseek-harness-remote-node            │
+        │  ctx.fs ........... @shaowenchen/deepseek-harness-remote-node/fs          │
+        │  ctx.subprocess ... @shaowenchen/deepseek-harness-remote-node/subprocess  │
         └───────────────────────▲───────────────────────────────┘
                                 │ wss, dialled OUT by the node
         ┌───────────────────────┴───────────────────────────────┐
@@ -120,15 +120,15 @@ Skip to [On the node](#on-the-node) if you do not want to read the config.
 ```yaml
 - insert:
     - id: node-registry
-      name: '@shaowenchen/dsh-node'
+      name: '@shaowenchen/deepseek-harness-remote-node'
       config:
         cwd: /srv/workspace        # working directory ON THE NODE
         heartbeatIntervalMs: 2000  # ping cadence and pong deadline
         onDisconnect: orphan       # orphan | terminate node processes on a drop
     - id: fs-node
-      name: '@shaowenchen/dsh-node/fs'          # serves ctx.fs
+      name: '@shaowenchen/deepseek-harness-remote-node/fs'          # serves ctx.fs
     - id: subprocess-node
-      name: '@shaowenchen/dsh-node/subprocess'  # serves ctx.subprocess
+      name: '@shaowenchen/deepseek-harness-remote-node/subprocess'  # serves ctx.subprocess
 
 # Exactly one execution world may exist. Leaving the host's own providers
 # mounted beside the node's is a composition error, not a fallback — and
@@ -164,116 +164,22 @@ machine's identity without connecting.
 
 ### Then just talk to it
 
-Once the node is registered, **you do not invoke anything.** You talk to the
-agent normally, and its file and shell tools happen to run on the remote
-machine. Nothing about the prompt changes; what changes is where the work lands.
+Once the node is registered, **you invoke nothing.** You talk to the agent
+normally and its tools happen to run on the remote machine.
 
-**Checking the node's resources** — the canonical example. Every one of these
-runs `df`/`free`/`top` on the **node**:
+Reading — runs `df`, `free`, `top` on the node, because `ctx.subprocess` is
+served from there:
 
-> 看一下那台机器的磁盘还剩多少
+> How much disk space is left on the workspace machine?
 
-> Check the disk usage on the workspace machine.
-
-> Is anything eating CPU on that box right now?
-
-> How much memory is free there?
-
-The agent calls its `bash` tool with `df -h`, `free -m`, `uptime`, or whatever
-answers the question — and because `ctx.subprocess` is served by
-`@shaowenchen/dsh-node/subprocess`, those commands execute on the node. The
-output comes back through the same channel. Run the identical prompt with the
-node disconnected and it fails rather than reporting the host's numbers: a
-missing node is a failed execution world, never a fallback to the host. See
-[SECURITY.md](SECURITY.md).
-
-**Working on the node's files** — because `ctx.fs` points there too:
-
-> What's in the workspace directory? Summarise what this project does.
-
-> Find every TODO in the source tree.
+Writing — edits the node's disk, because `ctx.fs` is served from there:
 
 > Rename `config.yaml` to `config.yml` and update the references.
 
-These read and write the node's disk. An edit is a single guarded operation
-executed *on the node*, not a host-side stat followed by a write, so the version
-check and the write happen in one critical section.
-
-**Interactive and long-running work** — terminals and processes:
-
-> Start a dev server and tell me when it's listening.
-
-> Open a REPL and check whether that library imports cleanly.
-
-> Run the test suite and show me only the failures.
-
-These go through `proc.*` and `tty.*`. Long builds keep running on the node if
-the channel blips (`onDisconnect: orphan`), and terminals are real PTYs — so
-anything that prompts, pages, or colours its output behaves the way it does in
-your own shell.
-
-**A note on what you will not see.** Remote paths never travel over a text
-channel, and the host never rewrites them. What you see in the transcript is the
-path as the node resolved it. If a path looks wrong, the node's namespace is the
-thing to check — not the host's.
-
-## Development
-
-```sh
-cd packages/node
-npm ci
-npm run typecheck   # tsc --noEmit
-npm test            # node --test over tests/*.spec.ts
-npm run build       # emits lib/ and lib/types/
-node lib/agent-cli.js --describe
-```
-
-57 cases over a real HTTP server, real upgrades, real sockets, real process
-trees, and real PTYs — the fail-closed suite, a filesystem round-trip driven by
-a real agent, process and terminal integration, and two parity suites against
-the dsh local backends. No test framework: Node's built-in runner strips the
-TypeScript types itself.
-
-CI runs that sequence plus a CLI smoke test and an entry-point check on every
-push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-
-### Layout
-
-```
-packages/node/                      # the published package: @shaowenchen/dsh-node
-├── src/
-│   ├── protocol.ts                 # frame types, operation vocabulary, failure codes
-│   ├── index.ts                    # NodeRegistry (ctx.nodeRegistry): channel, identity, heartbeat
-│   ├── agent.ts                    # NodeAgent: the dialling process, on the remote machine
-│   ├── fs-ops.ts                   # filesystem semantics, executed on the node
-│   ├── proc-ops.ts                 # process trees, escalation, bounded output collection
-│   ├── tty-ops.ts                  # PTY terminals, loaded lazily (node-pty is optional)
-│   ├── fs-node.ts                  # entry point ./fs: implements ctx.fs over the channel
-│   ├── subprocess-node.ts          # entry point ./subprocess: implements ctx.subprocess
-│   └── agent-cli.ts                # the `dsh-node` entry point
-├── tests/
-│   ├── fail-closed.spec.ts         # the safety property, over real sockets
-│   ├── proc-tty.spec.ts            # process trees and real PTYs, end to end
-│   ├── fs-parity.spec.ts           # ctx.fs vs the real dsh-fs-local
-│   └── subprocess-parity.spec.ts   # ctx.subprocess vs the real dsh-subprocess-local
-└── cordis.patch.yml                # the bundle patch a dsh deployment mounts
-
-scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
-scripts/install-node.sh             # remote-machine agent installer, same idea
-2026-09-11-remote-node-execution-world.md   # design document
-```
-
-### Terminals are conditional
-
-`fs.*` and `proc.*` are built on Node alone; `tty.*` needs a **PTY**, because a
-program decides how to behave from whether its stdin is a terminal — a pipe
-would run your shell non-interactively and break anything that prompts or pages.
-
-That substrate is `node-pty`, a native module declared as an **optional**
-dependency. The consequence is deliberate: a machine where its native build
-fails still installs and still serves `fs.*` and `proc.*`, and the agent
-advertises `tty.*` only when a substrate loads. Where it cannot, a host refuses
-those operations with `unsupported` rather than hanging on them.
+That is the whole interaction. The prompt does not change; what changes is where
+the work lands. With the node disconnected both fail rather than reporting the
+host's numbers — a missing node is a failed execution world, never a fallback.
+See [SECURITY.md](SECURITY.md).
 
 ## Contributing
 

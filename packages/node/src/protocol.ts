@@ -11,7 +11,7 @@
  * already uses (open / data / end / error / cancel, one `ready` opening item,
  * a generation number), so a reader who knows that transport recognizes this
  * one instead of learning a second set of rules.
- * @module @shaowenchen/dsh-node/protocol
+ * @module @shaowenchen/deepseek-harness-remote-node/protocol
  */
 
 /** Protocol version. A mismatch is refused rather than negotiated. */

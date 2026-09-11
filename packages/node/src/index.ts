@@ -12,7 +12,7 @@
  * {@link NodeRegistry.open} refuses with `disconnected` when no node is
  * registered, which is what keeps an adapter from silently mutating host files
  * that the user believes are remote.
- * @module @shaowenchen/dsh-node
+ * @module @shaowenchen/deepseek-harness-remote-node
  */
 
 import type { Duplex } from 'node:stream'

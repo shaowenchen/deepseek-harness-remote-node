@@ -1,5 +1,5 @@
 {
-  "name": "@shaowenchen/dsh-node",
+  "name": "@shaowenchen/deepseek-harness-remote-node",
   "version": "0.1.0",
   "description": "Turn a remote machine into a DeepSeek Harness (dsh) execution world: the node dials into dsh, no inbound port needed",
   "license": "MIT",
