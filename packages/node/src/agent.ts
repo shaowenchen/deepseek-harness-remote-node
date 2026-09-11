@@ -533,8 +533,16 @@ export class NodeAgent {
     if (this.stopping) return
     const socket = new WebSocket(this.opts.url)
     this.socket = socket
+    let reachedOpen = false
+
+    this.log(
+      this.attempt === 0
+        ? `connecting to ${this.opts.url}`
+        : `connecting to ${this.opts.url} (attempt ${this.attempt + 1})`,
+    )
 
     socket.on('open', () => {
+      reachedOpen = true
       socket.send(encodeControl({
         type: 'hello',
         protocolVersion: NODE_PROTOCOL_VERSION,
@@ -564,6 +572,26 @@ export class NodeAgent {
       void this.handle(socket, frame)
     })
 
+    // The reason a connection failed is the single most useful diagnostic this
+    // process can produce, and `ws` scatters it across three events. All three
+    // are captured and handed to `dropped`, which is the only place that
+    // decides what to report:
+    //
+    //  - `unexpected-response` carries the HTTP status when a server answered
+    //    without upgrading. Without this listener a 404 or a 502 is invisible:
+    //    `ws` emits a bare `error` with the response already discarded, which
+    //    is why a misconfigured proxy used to look identical to a dead network.
+    //  - `error` carries transport failures — TLS rejection, DNS failure,
+    //    refused connection — with a code worth printing verbatim.
+    //  - `close` carries the WebSocket close code, which distinguishes a peer
+    //    that hung up (1006, no code) from one that deliberately closed.
+    let failure: string | undefined
+
+    // Idempotent on purpose, and called from BOTH `error` and `close`: `ws`
+    // emits either alone depending on how the attempt failed, so a loop that
+    // listens for only one stalls on the other. A 502 answered without an
+    // upgrade produces `error` with no `close`, and a normal hangup produces
+    // `close` with no `error`.
     const dropped = () => {
       if (this.socket !== socket) return
       this.socket = undefined
@@ -575,10 +603,36 @@ export class NodeAgent {
       this.world.stdinStreams.clear()
       this.world.pipeStreams.clear()
       if (this.opts.onDisconnect === 'terminate') void this.world.reapAll()
-      this.scheduleReconnect()
+      // A connection that reached `open` and then dropped is a plain
+      // disconnect; one that never opened is a failure to connect, and the two
+      // want different words because they point at different problems.
+      this.scheduleReconnect(reachedOpen ? undefined : failure)
     }
-    socket.on('close', dropped)
-    socket.on('error', dropped)
+
+    socket.on('unexpected-response', (_req, res) => {
+      failure = describeHttpStatus(res.statusCode)
+      // The response must be consumed AND the socket torn down. An undrained
+      // response keeps the connection open, and `ws` emits no `close` for a
+      // socket that is never terminated — so a server answering 502 without
+      // upgrading would hang this agent silently, forever, with no reconnect
+      // and no log at all. `terminate` guarantees the terminal event this loop
+      // needs to keep going.
+      res.resume()
+      socket.terminate()
+    })
+
+    socket.on('error', (error) => {
+      failure ??= describeSocketError(error)
+      dropped()
+    })
+
+    socket.on('close', (code, reason) => {
+      const text = reason.toString()
+      failure ??= text.length > 0
+        ? `closed by the host (code ${code}: ${text})`
+        : `connection closed without a response (code ${code})`
+      dropped()
+    })
   }
 
   /**
@@ -612,6 +666,7 @@ export class NodeAgent {
       case 'ready':
         this.attempt = 0
         this.log(`registered as ${this.opts.nodeId} (generation ${frame.generation}, cwd ${frame.cwd})`)
+        this.log(`advertising ${implementedOperations().length} operations`)
         return
 
       case 'refused':
@@ -677,7 +732,13 @@ export class NodeAgent {
     socket.send(encodePayload(streamId, kind, bytes), { binary: true })
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Schedule the next connection attempt.
+   * @param failure - why the attempt failed, when it never reached `open`.
+   *   Reported so an operator can tell a misconfigured proxy from an absent
+   *   network without reaching for a packet capture.
+   */
+  private scheduleReconnect(failure?: string): void {
     if (this.stopping) return
     const ceiling = Math.min(
       this.opts.reconnectMaxMs,
@@ -687,9 +748,78 @@ export class NodeAgent {
     // does not return in lockstep.
     const delay = ceiling / 2 + Math.random() * (ceiling / 2)
     this.attempt += 1
-    this.log(`disconnected; reconnecting in ${Math.round(delay)}ms`)
+    this.log(
+      failure === undefined
+        ? `disconnected; reconnecting in ${Math.round(delay)}ms`
+        : `cannot connect: ${failure}; reconnecting in ${Math.round(delay)}ms`,
+    )
     this.retry = setTimeout(() => { this.connect() }, delay)
-    this.retry.unref?.()
+    this.retry?.unref?.()
+  }
+}
+
+/**
+ * Turn a non-upgrade HTTP response into something an operator can act on.
+ *
+ * The status alone is not enough to know where to look, so each one carries the
+ * layer it implicates. These are the failures this project actually produces:
+ * a path the host never registered, a proxy that cannot reach the host, and a
+ * request that arrived in cleartext where TLS is required.
+ * @param status - the HTTP status code the server answered with.
+ * @returns a description naming the likely cause.
+ */
+function describeHttpStatus(status: number | undefined): string {
+  switch (status) {
+    case undefined:
+      return 'the host answered without upgrading, and sent no status'
+    case 101:
+      // Reaching here means the upgrade was answered but the socket failed
+      // later, so the status is not the story.
+      return 'the connection failed after a successful upgrade'
+    case 301:
+    case 302:
+    case 307:
+    case 308:
+      return `HTTP ${status} redirect — this URL is not the final one; use the address it redirects to, and note that ws:// is usually redirected to wss://`
+    case 401:
+    case 403:
+      return `HTTP ${status} — an authentication layer rejected the request. The node channel expects no browser session; check whether a gateway is guarding this path`
+    case 404:
+      return `HTTP ${status} — no node channel is registered at this path. Check that the plugin is mounted and that the path matches the host's config`
+    case 502:
+    case 503:
+    case 504:
+      return `HTTP ${status} — a proxy reached the host but the host did not answer. Check that dsh is listening and that the proxy forwards /node/v1 to its port`
+    default:
+      return `HTTP ${status} — the host refused to upgrade the connection`
+  }
+}
+
+/**
+ * Turn a WebSocket transport error into something an operator can act on.
+ * @param error - the error `ws` emitted.
+ * @returns a description naming the likely cause.
+ */
+function describeSocketError(error: unknown): string {
+  const code = (error as { code?: string }).code
+  const message = error instanceof Error ? error.message : String(error)
+  switch (code) {
+    case 'ECONNREFUSED':
+      return 'connection refused — nothing is listening at that address'
+    case 'ENOTFOUND':
+    case 'EAI_AGAIN':
+      return `host not found (${code}) — check the hostname and this machine's DNS`
+    case 'ETIMEDOUT':
+      return 'connection timed out — the address is unreachable, or a firewall is dropping it'
+    case 'ECONNRESET':
+      return 'connection reset — something closed it mid-handshake'
+    case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
+    case 'CERT_HAS_EXPIRED':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'SELF_SIGNED_CERT_IN_CHAIN':
+      return `TLS certificate rejected (${code})`
+    default:
+      return code !== undefined ? `${code}: ${message}` : message
   }
 }
 
