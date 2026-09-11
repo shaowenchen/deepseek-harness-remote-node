@@ -1,8 +1,5 @@
 # deepseek-harness-remote-node
 
-[![CI](https://github.com/shaowenchen/deepseek-harness-remote-node/actions/workflows/ci.yml/badge.svg)](https://github.com/shaowenchen/deepseek-harness-remote-node/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-
 Turn a **remote machine** into a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 (`dsh`) execution world.
 
@@ -13,78 +10,93 @@ calls, session state, and plugins stay on the host.
 
 No inbound port. No public address. No NAT traversal on the remote side.
 
-## Status
+---
 
-| | |
-|---|---|
-| ✅ **Works** | Channel, registration, heartbeat, fail-closed semantics, and the full `fs.*` operation family — tested end-to-end against a real HTTP server, real upgrades, and real sockets. |
-| ✅ **Works** | The full `proc.*` family (commands) — real process trees with tree-scoped `SIGTERM`→grace→`SIGKILL` escalation, bounded collected output with spill recovery, and live stdin. |
-| ✅ **Works** | The full `tty.*` family (terminals) — real PTYs, resize, and foreground-group signalling. Requires a PTY substrate on the node; see below. |
-| ✅ **Works** | **`@shaowenchen/dsh-node/fs`** — the adapter that serves `ctx.fs` from the node, so the agent's file operations actually happen there. Its behaviour is verified against the real local backend. |
-| ✅ **Works** | **`@shaowenchen/dsh-node/subprocess`** — the adapter that serves `ctx.subprocess` from the node, so commands, terminals, and language servers run there too. Verified against `dsh-subprocess-local`. |
-| ⚠️ **Conditional** | `tty.*` needs a usable **`node-pty`** on the node. `node-pty` is an *optional* dependency, so an install without a native build still works — the agent then advertises `fs.*` and `proc.*` only. |
-| ⚠️ **Not published** | Not **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
+## What it does
 
-One package carries all three entry points — the registry and both adapters —
-so installing it once is enough:
+dsh runs an agent that reads files, runs commands, and opens terminals. By
+default it does all of that **on the machine running dsh**. This project moves
+that work to another machine.
 
-| Entry point | What it mounts |
-|---|---|
-| `@shaowenchen/dsh-node` | `ctx.nodeRegistry`: the channel, identity, and heartbeat |
-| `@shaowenchen/dsh-node/fs` | `ctx.fs` |
-| `@shaowenchen/dsh-node/subprocess` | `ctx.subprocess` |
+| | Without this | With this |
+|---|---|---|
+| `ctx.fs` — reads, writes, edits | the dsh host's disk | the node's disk |
+| `ctx.subprocess` — commands, terminals, LSP | the dsh host's processes | the node's processes |
+| Agent loop, model calls, session state | the dsh host | the dsh host (unchanged) |
 
-They are separate entry points rather than one auto-mounting bundle because
-either adapter taken alone already changes where the agent's work happens. That
-is a decision about the deployment, not a default a package should impose. It
-also keeps the `dsh-*` seam packages optional: a composition that mounts only
-`ctx.fs` never needs `dsh-subprocess` installed.
+The point is that you keep the harness where your credentials, sessions, and
+model access live, while the actual work happens somewhere else — a beefier
+box, a machine with the right toolchain, or one you are allowed to touch.
 
-The agent advertises only what it implements, so the host refuses unimplemented
-operations early with `unsupported` rather than hanging on them — see
-`implementedOperations()` in [`src/agent.ts`](packages/node/src/agent.ts).
+Ask the agent "how much disk space is left on that machine?" and the `df` it
+runs executes on the **node**, not on the host. That is the whole feature.
 
-### Why terminals are conditional
+## Protection
 
-`fs.*` and `proc.*` are built on Node alone; `tty.*` needs a **PTY**, because a
-program decides how to behave from whether its stdin is a terminal. A pipe
-cannot answer that question, so a terminal over a pipe would run the user's
-shell in a non-interactive mode and break anything that prompts or pages.
+Two safety properties matter more than any feature here, and both are enforced
+by tests rather than by convention.
 
-That substrate is `node-pty`, a native module. It is declared as an **optional**
-dependency, which is the load-bearing decision: a machine where its native build
-fails still installs the agent and still serves the filesystem and process
-families the harness needs, and the agent reports `tty.*` as unimplemented rather
-than failing at the first terminal. `node-pty` ships prebuilds for common
-platforms, so in practice most nodes have terminals.
+### 1. A disconnected node is a failed world, never the host
 
-> ### ⚠️ Read this before deploying
->
-> **The node channel does not verify credentials.** Registration is gated only by
-> protocol version and the single-slot rule, so **any client that can reach
-> `/node/v1` can register as the node** and become the agent's execution world.
-> Keep it off the public internet. Full details in [Security](#security).
+**If the node goes away, every operation fails — nothing silently falls back to
+running on the dsh host.**
 
-## Why this shape
+This is the property the whole design rests on. If a drop degraded into "use the
+local filesystem", the agent would start editing the harness host's files while
+you believe it is working on the remote machine — and you would not find out
+until it had already written something. So a drop:
 
-This is not a new distributed-runtime layer. It implements two capability seams
-that already exist in dsh:
+- fails every in-flight operation with `disconnected` rather than leaving callers
+  suspended,
+- clears the registered node, so the next call refuses,
+- does **not** kill processes still running on the node (default
+  `onDisconnect: orphan`) — a network blip must not kill a running build,
+- does **not** reattach to a previous generation's handles. Reconnecting
+  increments the generation, and stale handles are invalid.
 
-| Seam | Meaning |
-|---|---|
-| `ctx.fs` | File reads, writes, edits, listings, metadata |
-| `ctx.subprocess` | Commands, terminals, language servers |
+Covered by [`tests/fail-closed.spec.ts`](packages/node/tests/fail-closed.spec.ts)
+over real sockets.
 
-dsh's architecture already establishes that these two together define **one
-execution world**, and that higher capabilities compose on top of them without
-naming a provider. Swapping the two providers moves the execution world without
-touching bash, PTY, or LSP.
+### 2. The channel does not authenticate its peers yet
 
-The design follows the existing E2B family (`dsh-e2b` + `dsh-fs-e2b` +
-`dsh-subprocess-e2b`) — one lifecycle owner plus two adapters — replacing "a
-third-party cloud SDK" with "a protocol we define".
+**Be clear about this before you deploy: any client that can reach `/node/v1`
+can register as the node and become the execution world.**
+
+The `hello` frame carries a `credential` and the agent sends it, but the registry
+**never reads that field**, and the protocol's `auth` refusal code has no
+reachable path. Registration is gated only by the protocol version and the
+single-slot rule. Enrollment and verification are specified in the
+[design document](2026-09-11-remote-node-execution-world.md) (§8) but are **not
+implemented**.
+
+Until then:
+
+- keep `/node/v1` off the public internet — restrict it by source address at the
+  reverse proxy,
+- run the agent as an unprivileged user, in a container or VM whose blast radius
+  you accept,
+- remember that `--cwd` is a *working directory, not a jail* — and that
+  `proc.*` is arbitrary code execution with the agent user's privileges, with no
+  command allow-list.
+
+See [SECURITY.md](SECURITY.md) for the full boundary and a deployment checklist.
+Report vulnerabilities through
+[private reporting](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new),
+not a public issue.
 
 ## How it works
+
+dsh's architecture already has two capability seams, and together they define
+**one execution world**:
+
+| Seam | What it covers |
+|---|---|
+| `ctx.fs` | reads, writes, edits, listings, metadata |
+| `ctx.subprocess` | commands, terminals, language servers |
+
+Higher capabilities compose on top of these two without naming a provider — so
+swapping both providers moves the execution world without touching bash, PTY, or
+LSP.
 
 ```
         ┌───────────────────────────────────────────────────────┐
@@ -105,130 +117,138 @@ third-party cloud SDK" with "a protocol we define".
         └───────────────────────────────────────────────────────┘
 ```
 
-Both capability seams point at the node, which is what makes this machine an
-execution world: the paths `ctx.fs` resolves are the paths `ctx.subprocess` runs
-in, because they are the same machine's.
+The chain, end to end: you ask the agent something → the agent calls its `bash`
+tool → `dsh-bash-local` calls `ctx.subprocess` (it never imports
+`child_process`; everything goes through the seam) → **this package's
+`./subprocess` entry point** forwards it over the channel → the agent on the
+node runs it. Every hop is a seam swap, which is why no consumer above needs to
+know where execution happens.
 
-One WebSocket carries every logical stream, multiplexed by `streamId`. Control
-frames are JSON text; payload frames are binary, each tagged with the channel it
-belongs to (`stdout` / `stderr` / `stdin` / `opaque`) so a reader can tell one
-process's streams apart without consulting the operation that opened them. The
-split is deliberate — paths and file bytes travel on the binary side so a remote
-path never passes through a text channel that could reinterpret it.
+**One WebSocket** carries every logical stream, multiplexed by `streamId`.
+Control frames are JSON text; payload frames are binary and tagged with the
+channel they belong to (`stdout` / `stderr` / `stdin` / `opaque`), so one
+process's streams are tellable apart. Paths are resolved **on the node** against
+the node's own path namespace — the host never normalizes, joins, or realpaths a
+remote path, because it would be wrong on the first Windows or case-insensitive
+node.
 
-Output is delivered two ways on purpose, because the two capability seams
-disagree about its shape. Collected process output is **pulled**: the host asks
-for an offset and the node keeps the bounded window, matching the seam's
-synchronous `readFrom(fromByte)` reader. Terminal output is **pushed**: the seam
-exposes it as a `Readable`, so frames are forwarded as they arrive and the stream
-is ended by an explicit `op.payloadEnd` when the terminal exits — which is also
-why a `proc.spawn` with piped streams replies with `payloadContinues` rather than
-letting its reply end the stream.
+**Output is delivered two ways on purpose**, because the two seams disagree
+about its shape:
 
-The frame vocabulary mirrors the browser Remote mux dsh already has
-(`open` / `data` / `end` / `error` / `cancel`, one `ready` opening item, a
-generation number), so a reader who knows that transport recognises this one
-instead of learning a second set of rules. Paths are resolved **on the node**
-against the node's own path namespace; the host never normalizes, joins, or
-realpaths a remote path.
+- **Collected process output is pulled.** The seam's reader is offset-addressed
+  and synchronous (`readFrom(fromByte)`), so the node keeps a bounded window and
+  the adapter asks for deltas.
+- **Terminal output is pushed.** The seam exposes it as a `Readable`, so frames
+  stream as they arrive and the reader ends when the terminal exits — via an
+  explicit `op.payloadEnd`, not a timeout.
 
-Registration is single-slot: two agents driving one machine would corrupt each
-other, so a second connection is refused with `busy` rather than merged.
+Both adapters are tested against dsh's **real** local backends
+(`dsh-fs-local`, `dsh-subprocess-local`) over the same operations, so "behaves
+the same as running locally" is checked rather than asserted. That comparison is
+why a few things match upstream byte for byte — the output cap trims to exactly
+the caller's limit, slicing inside a chunk, because the local backend does.
 
-## Fail-closed: the one property that matters
+**Registration is single-slot.** Two agents driving one machine would corrupt
+each other, so a second connection is refused with `busy` rather than merged.
 
-**A disconnected node is a failed execution world, never a fallback to the host.**
+## Usage
 
-If a drop were allowed to degrade into "use the local filesystem", the agent
-would start editing the harness host's files while the user believes it is
-working on the remote machine. That is the most dangerous failure this feature
-can have, so it has its own test suite:
-[`tests/fail-closed.spec.ts`](packages/node/tests/fail-closed.spec.ts).
+Node **22+** is required. The package is not on npm yet, so both sides install
+straight from GitHub — no clone needed.
 
-A dropped connection therefore:
+### 1. Configure the host
 
-- fails every in-flight operation with `disconnected` rather than leaving
-  callers suspended,
-- clears the registered node so the next call refuses,
-- does **not** terminate processes still running on the node (default
-  `onDisconnect: orphan`) — a network blip must not kill a running build,
-- does **not** reattach to a previous generation's handles. A reconnection
-  increments the generation; stale handles are invalid.
-
-## Security
-
-**The node channel does not authenticate its peers yet.** The `hello` frame
-carries a `credential` and the agent sends it, but the registry **never reads
-that field**, and the protocol's `auth` refusal code has no reachable path.
-Registration is gated only by the protocol version and the single-slot rule.
-
-**Any client that can reach `/node/v1` can register as the node** and become the
-execution world for everything the agent does. Enrollment, credential
-verification, and rotation are specified in the [design
-document](2026-09-11-remote-node-execution-world.md) (§8) but are **not
-implemented**.
-
-Until they are:
-
-- keep `/node/v1` off the public internet — restrict it by source address at the
-  reverse proxy,
-- run the agent as an unprivileged user, in a container or VM whose blast radius
-  you accept,
-- treat `--cwd` as a *working directory, not a jail* — paths are resolved on the
-  node against its own namespace and are not confined to it.
-
-See [SECURITY.md](SECURITY.md) for the full boundary description, the other
-known limitations, and a deployment checklist. To report a vulnerability, use
-GitHub's [private vulnerability
-reporting](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new) —
-not a public issue.
-
-## Install
-
-Node **22+** is required. The npm package is not published yet, so both sides
-install straight from GitHub — no clone needed. Three steps: configure the dsh
-host, install the agent on the node, then use it.
-
-### 1. Configure the dsh host
-
-Run this on the machine running dsh. It downloads the plugin, builds it, symlinks
-it into the profile, and registers the `node-registry` row:
+Run this on the machine running dsh. It downloads the package, builds it,
+symlinks it into the profile, and appends the plugin rows:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
   | sh -s -- --cwd /srv/workspace
 ```
 
-Add `--dry-run` to preview, `--ref <branch|tag|sha>` to pin a revision, or
-`--dsh-home <dir>` for a non-default dsh home. Every step is idempotent, so
-re-running it is the upgrade path.
+`--cwd` is the working directory the execution world starts in **on the node**.
+The container case where no package manager exists is handled by the same
+script — see the [manual steps](#manual-host-install) if you would rather do it
+by hand.
 
-Then make the node authoritative. Exactly one execution world may exist;
-leaving the host's own filesystem provider mounted beside the node is a
-composition error, not a fallback.
+### 2. Install the agent on the node
+
+Run this **on the machine that will become the execution world**:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
+  | sh -s -- --bin-dir ~/.local/bin
+```
+
+Then connect it:
+
+```sh
+dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
+```
+
+It logs `registered as <nodeId> (generation 1, cwd ...)` once connected, and
+reconnects with jittered backoff after a drop. `dsh-node --describe` prints the
+machine's identity without connecting; `dsh-node --help` lists everything.
+
+### 3. Configure each component
+
+Mounting is done in the dsh user patch layer
+(`$DSH_HOME/profiles/web/cordis.patch.yml`). Each entry point is configured
+independently, so mount what you need:
 
 ```yaml
-# ~/.dsh/profiles/web/cordis.patch.yml — append
+- insert:
+    # The channel. Required by the other two; mounts ctx.nodeRegistry.
+    - id: node-registry
+      name: '@shaowenchen/dsh-node'
+      config:
+        # Working directory of the execution world ON THE NODE.
+        cwd: /srv/workspace
+        # Ping cadence AND pong deadline, in milliseconds. A peer that has not
+        # answered by the next tick is disconnected.
+        heartbeatIntervalMs: 2000
+        # What happens to processes on the node when the channel drops.
+        #   orphan    — leave them running (default; a blip must not kill a build)
+        #   terminate — ask the agent to reap them
+        onDisconnect: orphan
+        # Upgrade path the host claims. Default '/node/v1'.
+        # path: /node/v1
+
+    # Filesystem: serves ctx.fs from the node.
+    - id: fs-node
+      name: '@shaowenchen/dsh-node/fs'
+
+    # Processes: serves ctx.subprocess from the node.
+    - id: subprocess-node
+      name: '@shaowenchen/dsh-node/subprocess'
+
+# Exactly one execution world may exist. Leaving the host's own providers
+# mounted alongside the node's is a composition error, not a fallback — and
+# whichever wins silently decides where the agent's work happens.
 - id: fs-sandbox
+  disabled: true
+- id: fs-local
+  disabled: true
+- id: subprocess-local
   disabled: true
 ```
 
-This is left manual on purpose: with it disabled, **every filesystem tool fails
-until a node connects**. That is fail-closed working as designed, but it means a
-host that boots without a node is a host whose agent cannot touch a filesystem —
-so it is your call, not an installer's.
+Both adapters accept a `cwd` option and **deliberately ignore it**: the working
+directory belongs to the node, and the registry already carries it. A host that
+set it here would be claiming to know the remote layout.
 
-Verify the composition resolves without booting:
+| Option | Component | Default | Meaning |
+|---|---|---|---|
+| `cwd` | registry | *required* | Execution world's working directory on the node |
+| `heartbeatIntervalMs` | registry | `2000` | Ping cadence and pong deadline |
+| `onDisconnect` | registry | `orphan` | `orphan` or `terminate` node processes |
+| `path` | registry | `/node/v1` | Upgrade path the host claims |
+| `cwd` | both adapters | — | Accepted, ignored (see above) |
 
-```sh
-dsh --profile web --dump-config | grep -A4 node-registry
-```
+#### Manual host install
 
 <details>
-<summary>Doing it by hand instead</summary>
-
-dsh loads out-of-tree plugins through its **user patch layer**, so no package
-manager is needed inside the deployment container. Fetch the source first:
+<summary>If you would rather not run the script</summary>
 
 ```sh
 curl -fsSL https://github.com/shaowenchen/deepseek-harness-remote-node/archive/master.tar.gz \
@@ -242,80 +262,70 @@ mkdir -p "$SCOPE"
 ln -sfn /opt/deepseek-harness-remote-node/packages/node "$SCOPE/dsh-node"
 ```
 
-The scope directory is `@shaowenchen`, matching the package name — a symlink into
-a scope directory that does not exist will fail.
+The scope directory is `@shaowenchen`, matching the package name — a symlink
+into a scope directory that does not exist will fail.
 
-Then append to `$DSH_HOME/profiles/web/cordis.patch.yml` (append; do not replace
-the file, it may carry unrelated patches):
-
-```yaml
-- insert:
-    - id: node-registry
-      name: '@shaowenchen/dsh-node'
-      config:
-        cwd: /srv/workspace
-        heartbeatIntervalMs: 2000
-        onDisconnect: orphan
-    - id: fs-node
-      name: '@shaowenchen/dsh-node/fs'
-    - id: subprocess-node
-      name: '@shaowenchen/dsh-node/subprocess'
-```
+Then append the `insert:` block from
+[Configure each component](#3-configure-each-component) to
+`$DSH_HOME/profiles/web/cordis.patch.yml`. Append; do not replace the file, it
+may carry unrelated patches.
 
 </details>
 
-### 2. Configure the node
+### 4. What a conversation looks like
 
-Run this **on the machine that will become the execution world**. It is a
-different machine — the whole point is that the agent's filesystem work happens
-there, not on the host.
+Once the node is registered, **you do not invoke anything.** You talk to the
+agent normally, and its file and shell tools happen to run on the remote
+machine. Nothing about the prompt changes; what changes is where the work lands.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
-  | sh -s --
-```
+**Checking the node's resources** — the canonical example. Every one of these
+runs `df`/`free`/`top` on the **node**:
 
-It checks for Node 22+, downloads and builds the agent, and puts a `dsh-node`
-command on your PATH (`/usr/local/bin` when writable, else `~/.local/bin`; the
-script tells you if it is not on your PATH). Add `--bin-dir <dir>` to choose,
-or `--ref <branch|tag|sha>` to pin a revision.
+> 看一下那台机器的磁盘还剩多少
 
-Confirm the build works and see what the host will be told about this machine:
+> Check the disk usage on the workspace machine.
 
-```sh
-dsh-node --describe
-```
+> Is anything eating CPU on that box right now?
 
-Run the agent as an unprivileged user, in a container or VM whose blast radius
-you accept — see [Security](#security).
+> How much memory is free there?
 
-### 3. Run it
+The agent calls its `bash` tool with `df -h`, `free -m`, `uptime`, or whatever
+answers the question — and because `ctx.subprocess` is served by
+`@shaowenchen/dsh-node/subprocess`, those commands execute on the node. The
+output comes back through the same channel. Run the identical prompt with the
+node disconnected and it fails rather than reporting the host's numbers, which
+is [property 1](#1-a-disconnected-node-is-a-failed-world-never-the-host) doing
+its job.
 
-Start the host first, then connect the node:
+**Working on the node's files** — because `ctx.fs` points there too:
 
-```sh
-# 1. on the host
-dsh web
+> What's in the workspace directory? Summarise what this project does.
 
-# 2. on the node
-dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
-```
+> Find every TODO in the source tree.
 
-The agent logs `registered as <nodeId> (generation 1, cwd ...)` once the
-handshake completes, and reconnects with jittered backoff after a drop. From
-then on the agent's file operations happen on the node.
+> Rename `config.yaml` to `config.yml` and update the references.
 
-```sh
-dsh-node --help        # all options
-dsh-node --describe    # identity, no connection
-```
+These read and write the node's disk. An edit is a single guarded operation
+executed *on the node*, not a host-side stat followed by a write, so the version
+check and the write happen in one critical section.
 
-If the host is not directly reachable, point `--url` at a TLS-terminating
-reverse proxy and dial `wss://` instead. That path needs WebSocket upgrade
-headers passed through, response buffering disabled, and read/write timeouts
-**well above** `heartbeatIntervalMs` (default 2s) — the interval is both the
-cadence and the deadline, so a shorter proxy timeout severs healthy
-connections.
+**Interactive and long-running work** — terminals and processes:
+
+> Start a dev server and tell me when it's listening.
+
+> Open a REPL and check whether that library imports cleanly.
+
+> Run the test suite and show me only the failures.
+
+These go through `proc.*` and `tty.*`. Long builds keep running on the node if
+the channel blips (`onDisconnect: orphan`), and terminals are real PTYs — so
+anything that prompts, pages, or colours its output behaves the way it does in
+your own shell.
+
+**A note on what you will not see.** Remote paths never travel over a text
+channel, and the host never rewrites them. What you see in the transcript is the
+path as the node resolved it. If a path looks wrong, the node's namespace is the
+thing to check — not the host's.
 
 ## Development
 
@@ -330,14 +340,12 @@ node lib/agent-cli.js --describe
 
 57 cases over a real HTTP server, real upgrades, real sockets, real process
 trees, and real PTYs — the fail-closed suite, a filesystem round-trip driven by
-a real agent, process and terminal integration, and two parity suites that
-compare this package against the dsh local backends it must match. The suite
-needs no test framework: Node's built-in runner strips the TypeScript types
-itself, so the runtime dependencies are only `ws` and the dsh packages it
-builds against.
+a real agent, process and terminal integration, and two parity suites against
+the dsh local backends. No test framework: Node's built-in runner strips the
+TypeScript types itself.
 
-CI runs that same sequence plus a CLI smoke test and an entry-point check on
-every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+CI runs that sequence plus a CLI smoke test and an entry-point check on every
+push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ### Layout
 
@@ -363,26 +371,26 @@ packages/node/                      # the published package: @shaowenchen/dsh-no
 scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
 scripts/install-node.sh             # remote-machine agent installer, same idea
 2026-09-11-remote-node-execution-world.md   # design document
-SECURITY.md · CONTRIBUTING.md · CHANGELOG.md
 ```
 
-With every entry point mounted, the two capability seams that define an
-execution world both point at the remote machine, which is the goal the design
-document sets out.
+### Terminals are conditional
 
-## Design document
+`fs.*` and `proc.*` are built on Node alone; `tty.*` needs a **PTY**, because a
+program decides how to behave from whether its stdin is a terminal — a pipe
+would run your shell non-interactively and break anything that prompts or pages.
 
-[`2026-09-11-remote-node-execution-world.md`](2026-09-11-remote-node-execution-world.md)
-covers the protocol, lifecycle and failure semantics, sandbox and authorization,
-the security boundary, phased implementation, and the open questions. It also
-records *why not* E2B and *why not* an all-in-one container.
+That substrate is `node-pty`, a native module declared as an **optional**
+dependency. The consequence is deliberate: a machine where its native build
+fails still installs and still serves `fs.*` and `proc.*`, and the agent
+advertises `tty.*` only when a substrate loads. Where it cannot, a host refuses
+those operations with `unsupported` rather than hanging on them.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup and
-the two rules that matter: **never weaken fail-closed**, and **advertise only
-what you implement**. Release history is in [CHANGELOG.md](CHANGELOG.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: the fail-closed tests
+come first, and a new operation means three edits — the protocol vocabulary, the
+node-side implementation, and the adapter that forwards it.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT © Shaowen Chen — see [LICENSE](LICENSE).
