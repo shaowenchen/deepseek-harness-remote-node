@@ -31,59 +31,6 @@ box, a machine with the right toolchain, or one you are allowed to touch.
 Ask the agent "how much disk space is left on that machine?" and the `df` it
 runs executes on the **node**, not on the host. That is the whole feature.
 
-## Protection
-
-Two safety properties matter more than any feature here, and both are enforced
-by tests rather than by convention.
-
-### 1. A disconnected node is a failed world, never the host
-
-**If the node goes away, every operation fails — nothing silently falls back to
-running on the dsh host.**
-
-This is the property the whole design rests on. If a drop degraded into "use the
-local filesystem", the agent would start editing the harness host's files while
-you believe it is working on the remote machine — and you would not find out
-until it had already written something. So a drop:
-
-- fails every in-flight operation with `disconnected` rather than leaving callers
-  suspended,
-- clears the registered node, so the next call refuses,
-- does **not** kill processes still running on the node (default
-  `onDisconnect: orphan`) — a network blip must not kill a running build,
-- does **not** reattach to a previous generation's handles. Reconnecting
-  increments the generation, and stale handles are invalid.
-
-Covered by [`tests/fail-closed.spec.ts`](packages/node/tests/fail-closed.spec.ts)
-over real sockets.
-
-### 2. The channel does not authenticate its peers yet
-
-**Be clear about this before you deploy: any client that can reach `/node/v1`
-can register as the node and become the execution world.**
-
-The `hello` frame carries a `credential` and the agent sends it, but the registry
-**never reads that field**, and the protocol's `auth` refusal code has no
-reachable path. Registration is gated only by the protocol version and the
-single-slot rule. Enrollment and verification are specified in the
-[design document](2026-09-11-remote-node-execution-world.md) (§8) but are **not
-implemented**.
-
-Until then:
-
-- keep `/node/v1` off the public internet — restrict it by source address at the
-  reverse proxy,
-- run the agent as an unprivileged user, in a container or VM whose blast radius
-  you accept,
-- remember that `--cwd` is a *working directory, not a jail* — and that
-  `proc.*` is arbitrary code execution with the agent user's privileges, with no
-  command allow-list.
-
-See [SECURITY.md](SECURITY.md) for the full boundary and a deployment checklist.
-Report vulnerabilities through
-[private reporting](https://github.com/shaowenchen/deepseek-harness-remote-node/security/advisories/new),
-not a public issue.
-
 ## How it works
 
 dsh's architecture already has two capability seams, and together they define
@@ -153,77 +100,38 @@ each other, so a second connection is refused with `busy` rather than merged.
 
 ## Usage
 
-Node **22+** is required. The package is not on npm yet, so both sides install
-straight from GitHub — no clone needed.
+Node **22+** required. Not on npm yet, so both sides install from GitHub.
 
-### 1. Configure the host
-
-Run this on the machine running dsh. It downloads the package, builds it,
-symlinks it into the profile, and appends the plugin rows:
+### On the dsh host
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
   | sh -s -- --cwd /srv/workspace
 ```
 
-`--cwd` is the working directory the execution world starts in **on the node**.
-The container case where no package manager exists is handled by the same
-script — see the [manual steps](#manual-host-install) if you would rather do it
-by hand.
+That downloads the package, builds it, links it into the dsh profile, and writes
+the plugin config below into `$DSH_HOME/profiles/web/cordis.patch.yml`. It works
+inside the `deepseek-harness-web` container too, where no package manager exists.
+Skip to [On the node](#on-the-node) if you do not want to read the config.
 
-### 2. Install the agent on the node
-
-Run this **on the machine that will become the execution world**:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
-  | sh -s -- --bin-dir ~/.local/bin
-```
-
-Then connect it:
-
-```sh
-dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
-```
-
-It logs `registered as <nodeId> (generation 1, cwd ...)` once connected, and
-reconnects with jittered backoff after a drop. `dsh-node --describe` prints the
-machine's identity without connecting; `dsh-node --help` lists everything.
-
-### 3. Configure each component
-
-Mounting is done in the dsh user patch layer
-(`$DSH_HOME/profiles/web/cordis.patch.yml`). Each entry point is configured
-independently, so mount what you need:
+<details>
+<summary>The config it writes</summary>
 
 ```yaml
 - insert:
-    # The channel. Required by the other two; mounts ctx.nodeRegistry.
     - id: node-registry
       name: '@shaowenchen/dsh-node'
       config:
-        # Working directory of the execution world ON THE NODE.
-        cwd: /srv/workspace
-        # Ping cadence AND pong deadline, in milliseconds. A peer that has not
-        # answered by the next tick is disconnected.
-        heartbeatIntervalMs: 2000
-        # What happens to processes on the node when the channel drops.
-        #   orphan    — leave them running (default; a blip must not kill a build)
-        #   terminate — ask the agent to reap them
-        onDisconnect: orphan
-        # Upgrade path the host claims. Default '/node/v1'.
-        # path: /node/v1
-
-    # Filesystem: serves ctx.fs from the node.
+        cwd: /srv/workspace        # working directory ON THE NODE
+        heartbeatIntervalMs: 2000  # ping cadence and pong deadline
+        onDisconnect: orphan       # orphan | terminate node processes on a drop
     - id: fs-node
-      name: '@shaowenchen/dsh-node/fs'
-
-    # Processes: serves ctx.subprocess from the node.
+      name: '@shaowenchen/dsh-node/fs'          # serves ctx.fs
     - id: subprocess-node
-      name: '@shaowenchen/dsh-node/subprocess'
+      name: '@shaowenchen/dsh-node/subprocess'  # serves ctx.subprocess
 
 # Exactly one execution world may exist. Leaving the host's own providers
-# mounted alongside the node's is a composition error, not a fallback — and
+# mounted beside the node's is a composition error, not a fallback — and
 # whichever wins silently decides where the agent's work happens.
 - id: fs-sandbox
   disabled: true
@@ -233,46 +141,28 @@ independently, so mount what you need:
   disabled: true
 ```
 
-Both adapters accept a `cwd` option and **deliberately ignore it**: the working
-directory belongs to the node, and the registry already carries it. A host that
-set it here would be claiming to know the remote layout.
-
-| Option | Component | Default | Meaning |
-|---|---|---|---|
-| `cwd` | registry | *required* | Execution world's working directory on the node |
-| `heartbeatIntervalMs` | registry | `2000` | Ping cadence and pong deadline |
-| `onDisconnect` | registry | `orphan` | `orphan` or `terminate` node processes |
-| `path` | registry | `/node/v1` | Upgrade path the host claims |
-| `cwd` | both adapters | — | Accepted, ignored (see above) |
-
-#### Manual host install
-
-<details>
-<summary>If you would rather not run the script</summary>
-
-```sh
-curl -fsSL https://github.com/shaowenchen/deepseek-harness-remote-node/archive/master.tar.gz \
-  | tar -xz -C /opt && mv /opt/deepseek-harness-remote-node-master /opt/deepseek-harness-remote-node
-
-cd /opt/deepseek-harness-remote-node/packages/node && npm ci && npm run build
-
-DSH_HOME=~/.dsh
-SCOPE="$DSH_HOME/profiles/web/node_modules/@shaowenchen"
-mkdir -p "$SCOPE"
-ln -sfn /opt/deepseek-harness-remote-node/packages/node "$SCOPE/dsh-node"
-```
-
-The scope directory is `@shaowenchen`, matching the package name — a symlink
-into a scope directory that does not exist will fail.
-
-Then append the `insert:` block from
-[Configure each component](#3-configure-each-component) to
-`$DSH_HOME/profiles/web/cordis.patch.yml`. Append; do not replace the file, it
-may carry unrelated patches.
+The two adapters take no required options. They accept a `cwd` and deliberately
+ignore it: the working directory belongs to the node, and the registry already
+carries it. Mount only the adapters you want — the entry points are independent.
 
 </details>
 
-### 4. What a conversation looks like
+### On the node
+
+Run this **on the machine that becomes the execution world**, then connect it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
+  | sh -s -- --bin-dir ~/.local/bin
+
+dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
+```
+
+It logs `registered as <nodeId> (generation 1, cwd ...)` when connected, and
+reconnects with backoff after a drop. `dsh-node --describe` prints this
+machine's identity without connecting.
+
+### Then just talk to it
 
 Once the node is registered, **you do not invoke anything.** You talk to the
 agent normally, and its file and shell tools happen to run on the remote
@@ -293,9 +183,9 @@ The agent calls its `bash` tool with `df -h`, `free -m`, `uptime`, or whatever
 answers the question — and because `ctx.subprocess` is served by
 `@shaowenchen/dsh-node/subprocess`, those commands execute on the node. The
 output comes back through the same channel. Run the identical prompt with the
-node disconnected and it fails rather than reporting the host's numbers, which
-is [property 1](#1-a-disconnected-node-is-a-failed-world-never-the-host) doing
-its job.
+node disconnected and it fails rather than reporting the host's numbers: a
+missing node is a failed execution world, never a fallback to the host. See
+[SECURITY.md](SECURITY.md).
 
 **Working on the node's files** — because `ctx.fs` points there too:
 
