@@ -6,6 +6,37 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Credential verification on the node channel.** The `hello` frame's
+  `credential` was designed for, carried on the wire, and never read: before
+  this, registration was gated only by protocol version and the single-slot
+  rule, so anything that could reach `/node/v1` got a shell and a filesystem on
+  the node machine. The protocol has carried the `auth` refusal code from the
+  start, and it now has a reachable path.
+
+  Two configuration routes supply the expected value, in priority order:
+  `credential` in the plugin config (what the installer writes), or a
+  `nodeCredential` reference resolved through `ctx.credentials` so a deployment
+  that already manages secrets never writes this one down. When neither is set
+  the channel does not authenticate — the deliberate default that keeps an
+  existing deployment working — and the host says so on **every** registration,
+  because a silently-open channel is worse than a knowingly-open one.
+
+  The comparison is constant-time and both operands are hashed first. Hashing is
+  the part worth recording: comparing raw buffers needs a length check first,
+  and that check is a separate, very fast step that leaks the secret's LENGTH
+  before an attacker starts on its bytes.
+
+  `scripts/install-host.sh` generates a credential with `openssl rand`, stores
+  it at `$DSH_HOME/node-credential` (0600), and reuses it on later runs so
+  re-installing never invalidates a node that is already connected.
+  `--credential` supplies one instead.
+
+  Still missing, and documented as such: no enrollment flow, no rotation, and no
+  per-node identity — verification answers "is this the shared secret", not
+  "which node is this".
+
 ### Changed
 
 - **The three packages are now one.** `@shaowenchen/deepseek-harness-remote-node` carries all three
@@ -24,8 +55,6 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The layout follows upstream: `@deepseek-ai/dsh-agent` likewise exposes `.` and
   `./invariant`, and a dsh bundle patch mounts it as
   `name: '@deepseek-ai/dsh-agent/invariant'`.
-
-### Added
 
 - **The `proc.*` family** — ordinary processes, executed on the node over
   `node:child_process`. `proc.resolve`, `proc.spawn`, `proc.read`,

@@ -10,6 +10,10 @@
 #
 #   --cwd DIR          Execution world working directory on the node
 #                      (default: $HOME/.deepseek-harness-remote-node)
+#   --credential VALUE The credential agents must present. Generated and stored
+#                      in $DSH_HOME/node-credential (0600) when omitted, and
+#                      reused on later runs so a re-install does not invalidate
+#                      a node that is already connected.
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
 #   --dsh-home DIR     dsh home (default: $DSH_HOME, else ~/.dsh)
@@ -42,6 +46,7 @@ REPO_URL="https://github.com/shaowenchen/deepseek-harness-remote-node"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
 CACHE_DIR="${DSH_NODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/deepseek-harness-remote-node}"
 WORKSPACE_CWD=""
+CREDENTIAL=""
 REF="master"
 SOURCE_DIR=""
 DRY_RUN=0
@@ -50,11 +55,12 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --dsh-home) DSH_HOME="$2"; shift 2 ;;
     --cwd) WORKSPACE_CWD="$2"; shift 2 ;;
+    --credential) CREDENTIAL="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
     --source) SOURCE_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "install-host: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -228,6 +234,25 @@ else
     grep '^#' "$PATCH_FILE" > "$seed_tmp" 2>/dev/null || true
     mv "$seed_tmp" "$PATCH_FILE"
   fi
+  # A credential is generated once and reused on later runs, so re-installing
+  # never silently invalidates a node that is already connected. Skipped when
+  # the operator supplied one with --credential.
+  CREDENTIAL_FILE="${DSH_NODE_CREDENTIAL_FILE:-$DSH_HOME/node-credential}"
+  if [ -n "$CREDENTIAL" ]; then
+    say "      credential: supplied on the command line"
+  elif [ -f "$CREDENTIAL_FILE" ]; then
+    CREDENTIAL=$(cat "$CREDENTIAL_FILE")
+    say "      credential: reusing $CREDENTIAL_FILE"
+  elif command -v openssl >/dev/null 2>&1; then
+    CREDENTIAL=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+    umask 077
+    printf '%s\n' "$CREDENTIAL" > "$CREDENTIAL_FILE"
+    chmod 600 "$CREDENTIAL_FILE"
+    say "      credential: generated, stored in $CREDENTIAL_FILE (0600)"
+  else
+    die "no credential available: pass --credential, or install openssl so one can be generated"
+  fi
+
   {
     printf '\n# ── remote node execution world (added by scripts/install-host.sh) ──\n'
     printf -- '- insert:\n'
@@ -235,6 +260,7 @@ else
     printf -- "      name: '@shaowenchen/deepseek-harness-remote-node'\n"
     printf -- '      config:\n'
     printf -- '        cwd: %s\n' "$WORKSPACE_CWD"
+    printf -- '        credential: %s\n' "$CREDENTIAL"
     printf -- '        heartbeatIntervalMs: 2000\n'
     printf -- '        onDisconnect: orphan\n'
     # The two adapters are what actually move the execution world: without them
@@ -418,10 +444,20 @@ say "  On the remote machine, use the SAME scheme this host is reachable on."
 say "  A host behind TLS needs wss://; ws:// to an HTTPS host is redirected and"
 say "  the redirect is not followed, so it will never connect:"
 say ""
-say "      dsh-node --url wss://<host>/node/v1 --credential <token> --cwd $WORKSPACE_CWD"
+say "      dsh-node --url wss://<host>/node/v1 \\"
+say "        --credential \"\$(cat $CREDENTIAL_FILE)\" \\"
+say "        --cwd $WORKSPACE_CWD"
 say ""
-say "  Note: the node channel does not verify credentials yet. The credential"
-say "  is sent by the agent but never checked by the registry, so registration"
-say "  is gated only by protocol version and the single-slot rule. Enrollment"
-say "  and verification are not implemented — do not expose /node/v1 beyond a"
-say "  trusted network until they are. See SECURITY.md."
+say "  That credential was written into the plugin config, so this host now"
+say "  VERIFIES it: an agent presenting anything else is refused with the"
+say "  \`auth\` code and never reaches an operation. Copy the same value to the"
+say "  node — the file above is 0600 and readable only by you."
+say ""
+say "  Keep it secret either way. It is a bearer token: a read of the plugin"
+say "  config is a shell on the node machine."
+say ""
+say "  If you deliberately want the old, unverified behaviour, remove the"
+say "  \`credential:\` line from the config. The host then admits any peer that"
+say "  reaches /node/v1 and says so loudly on every registration — that is only"
+say "  appropriate when the network path itself is trusted, e.g. loopback or a"
+say "  private link. See SECURITY.md."

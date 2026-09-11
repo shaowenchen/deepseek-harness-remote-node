@@ -31,9 +31,11 @@ import {
   isAgentFrame,
   type NodeErrorCode,
   type NodeOperation,
+  type HelloFrame,
   type NodeRefusalCode,
   type PayloadKind,
 } from './protocol.ts'
+import { credentialMatches, expectedCredential, type ExpectedCredential } from './auth.ts'
 
 export * from './protocol.ts'
 
@@ -43,12 +45,28 @@ export * from './protocol.ts'
 // to reach through a private path to do it.
 export * from './agent.ts'
 
+/** Credentials-service reference this plugin resolves for its expected secret. */
+const NODE_CREDENTIAL_REF = 'nodeCredential'
+
 /** Plugin configuration. */
 export interface Config {
   /** Upgrade path the owner claims. @default '/node/v1' */
   path?: string
   /** Absolute working directory of the execution world on the node. */
   cwd: string
+  /**
+   * The credential an agent must present to register.
+   *
+   * When this is unset AND no `nodeCredential` reference resolves, the channel
+   * does not verify anything and any peer that reaches the path can register —
+   * the behaviour of every release before this field existed. Setting it is
+   * what turns the channel from "network-gated" into "authenticated", and a
+   * deployment reachable from outside a trusted network should always set it.
+   *
+   * A reference to `nodeCredential` (via the credentials service) is preferred
+   * where one is available, so the secret never appears in a config file.
+   */
+  credential?: string
   /** Ping cadence and pong deadline in milliseconds. @default 2000 */
   heartbeatIntervalMs?: number
   /**
@@ -135,12 +153,14 @@ export class NodeRegistry extends Service {
   static Config: Schema<Config> = Schema.object({
     path: Schema.string().default(NODE_CHANNEL_PATH),
     cwd: Schema.string().required(),
+    credential: Schema.string(),
     heartbeatIntervalMs: Schema.number().default(DEFAULT_HEARTBEAT_INTERVAL_MS),
     onDisconnect: Schema.union(['orphan', 'terminate']).default('orphan'),
   })
 
   private readonly path: string
   private readonly cwd: string
+  private readonly configuredCredential: string | undefined
   private readonly heartbeatIntervalMs: number
   private readonly onDisconnect: 'orphan' | 'terminate'
 
@@ -171,6 +191,7 @@ export class NodeRegistry extends Service {
     super(ctx, 'nodeRegistry')
     this.path = config.path ?? NODE_CHANNEL_PATH
     this.cwd = config.cwd
+    this.configuredCredential = config.credential
     this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS
     this.onDisconnect = config.onDisconnect ?? 'orphan'
 
@@ -292,6 +313,106 @@ export class NodeRegistry extends Service {
     ])
   }
 
+  /**
+   * Verify a `hello` and, if it passes, register the node.
+   *
+   * Asynchronous because the expected credential may come from the credentials
+   * service. Nothing is registered before this settles, so an unverified socket
+   * cannot reach an operation or occupy the single slot.
+   * @param socket - the socket that sent the hello.
+   * @param frame - the hello frame, captured by the caller.
+   * @param markRegistered - reports a successful registration back to `adopt`,
+   *   which owns the per-socket flag deciding whether a close emits an event.
+   */
+  private async verifyAndRegister(
+    socket: WebSocket,
+    frame: HelloFrame,
+    markRegistered: () => void,
+  ): Promise<void> {
+    const expected = await expectedCredential(
+      this.configuredCredential,
+      this.credentialsResolver(),
+    )
+
+    // Re-check the socket after the await: verification is a round-trip, and
+    // the peer may have disconnected while it was in flight. Registering a dead
+    // socket would leave a descriptor pointing at nothing.
+    if (socket.readyState !== socket.OPEN) return
+
+    if (expected.kind === 'value') {
+      if (!credentialMatches(frame.credential, expected.value)) {
+        this.note(`dsh-node: refused ${frame.nodeId} — credential does not match (${expected.source})`)
+        this.refuse(socket, 'auth', 'invalid credential')
+        return
+      }
+    } else {
+      // Nothing configured: the channel is network-gated only. Said out loud on
+      // every registration, because this is the state a deployment should not
+      // sit in unknowingly — the node's shell is reachable by anyone who can
+      // reach this path.
+      this.note(
+        `dsh-node: ${frame.nodeId} registering WITHOUT credential verification `
+        + '(no `credential` configured and no `nodeCredential` reference resolved) '
+        + '— anyone who can reach this path gets a shell on the node',
+      )
+    }
+
+    if (this.socket && this.socket !== socket && this.socket.readyState === socket.OPEN) {
+      this.refuse(socket, 'busy', `node ${frame.nodeId} already has an active connection`)
+      return
+    }
+    this.generation += 1
+    this.descriptor = {
+      nodeId: frame.nodeId,
+      agentVersion: frame.agentVersion,
+      platform: frame.platform,
+      arch: frame.arch,
+      capabilities: frame.capabilities,
+      cwd: this.cwd,
+      generation: this.generation,
+    }
+    this.socket = socket
+    markRegistered()
+    this.startHeartbeat(socket)
+    // Announced here as well as in the agent's own log, because this is the
+    // host side of the answer to "which machine is my execution world?" — and
+    // the agent's log lives on a machine the operator may not be looking at.
+    //
+    // Written to stderr rather than `ctx.logger`: that service is a ring buffer
+    // with no console sink in the shipped profiles, so an `info()` there is
+    // captured and printed nowhere — it reads as logging while being invisible
+    // in a terminal or a service journal.
+    this.note(
+      `dsh-node: ${frame.nodeId} registered (generation ${this.generation}, `
+      + `${frame.platform}/${frame.arch}, ${frame.capabilities.length} operations, cwd ${this.cwd})`,
+    )
+    socket.send(encodeControl({
+      type: 'ready',
+      generation: this.generation,
+      cwd: this.cwd,
+      home: this.cwd,
+    }))
+  }
+
+  /**
+   * A resolver for the `nodeCredential` reference, when the credentials service
+   * is mounted.
+   *
+   * Optional by design: a composition without `ctx.credentials` still works,
+   * and `credential` in the plugin config remains the universal route.
+   * @returns a resolver, or undefined when the service is absent.
+   */
+  private credentialsResolver(): (() => Promise<string | undefined>) | undefined {
+    const credentials = this.ctx.get('credentials') as
+      | { resolve(ref: unknown): Promise<{ value?: string } | undefined> }
+      | undefined
+    if (!credentials) return undefined
+    return async () => {
+      const hit = await credentials.resolve(NODE_CREDENTIAL_REF)
+      return hit?.value
+    }
+  }
+
   /** @internal Adopt a freshly upgraded socket as the node channel. */
   private adopt(socket: WebSocket): void {
     let registered = false
@@ -319,44 +440,12 @@ export class NodeRegistry extends Service {
             this.refuse(socket, 'protocol', `host speaks protocol ${NODE_PROTOCOL_VERSION}`)
             return
           }
-          if (this.socket && this.socket !== socket && this.socket.readyState === socket.OPEN) {
-            this.refuse(socket, 'busy', `node ${frame.nodeId} already has an active connection`)
-            return
-          }
-          this.generation += 1
-          this.descriptor = {
-            nodeId: frame.nodeId,
-            agentVersion: frame.agentVersion,
-            platform: frame.platform,
-            arch: frame.arch,
-            capabilities: frame.capabilities,
-            cwd: this.cwd,
-            generation: this.generation,
-          }
-          this.socket = socket
-          registered = true
-          this.startHeartbeat(socket)
-          // Announced here as well as in the agent's own log, because this is
-          // the host side of the answer to "which machine is my execution
-          // world?" — and the agent's log lives on a machine the operator may
-          // not be looking at.
-          //
-          // Written to stderr rather than `ctx.logger`: that service is a ring
-          // buffer with no console sink in the shipped profiles, so an
-          // `info()` there is captured for inspection and printed nowhere —
-          // it reads as logging while being invisible in a terminal or a
-          // service journal. stderr is where this process's own diagnostics
-          // already go.
-          this.note(
-            `dsh-node: ${frame.nodeId} registered (generation ${this.generation}, `
-            + `${frame.platform}/${frame.arch}, ${frame.capabilities.length} operations, cwd ${this.cwd})`,
-          )
-          socket.send(encodeControl({
-            type: 'ready',
-            generation: this.generation,
-            cwd: this.cwd,
-            home: this.cwd,
-          }))
+          // Verification resolves asynchronously (the expected value may come
+          // from the credentials service), so the rest of registration happens
+          // in the continuation. The frame is captured here: `frame` is a loop
+          // binding and reading it after an await would see a later frame.
+          const hello = frame
+          void this.verifyAndRegister(socket, hello, () => { registered = true })
           return
         }
 
