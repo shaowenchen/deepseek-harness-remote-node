@@ -20,10 +20,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both adapters depend on the agent package via `file:../node`, so they
-        # are verified after it rather than in parallel — see the "Build the
-        # agent package first" step.
-        package: [packages/node, packages/fs-node, packages/subprocess-node]
+        # One package, one job. The three entry points (the registry, the
+        # filesystem adapter, and the subprocess adapter) ship together, so
+        # there is no dependency ordering to respect between them.
+        package: [packages/node]
     defaults:
       run:
         working-directory: ${{ matrix.package }}
@@ -38,23 +38,12 @@ jobs:
       # themselves need no test framework: Node's built-in runner strips the
       # TypeScript types, so the runtime dependencies are only `ws` and the
       # dsh packages they build against.
-      #
-      # The adapters resolve `@shaowenchen/dsh-node` through a `file:../node`
-      # dependency, which links the source directory — so the agent package must
-      # be BUILT before the adapter's tests can import it.
-      - name: Build the agent package first
-        if: matrix.package != 'packages/node'
-        working-directory: packages/node
-        run: |
-          npm ci --no-audit --no-fund
-          npm run build
-
       - name: Install
-        # `node-pty` is an OPTIONAL dependency of the agent, so an install
-        # without a prebuilt binary for this platform still succeeds; the
-        # agent reports `tty.*` as unimplemented on such a machine, and the
-        # terminal tests skip rather than fail. That is the behaviour a real
-        # deployment gets, so CI exercises it rather than forcing a build.
+        # `node-pty` is an OPTIONAL dependency, so an install without a
+        # prebuilt binary for this platform still succeeds; the agent reports
+        # `tty.*` as unimplemented on such a machine, and the terminal tests
+        # skip rather than fail. That is the behaviour a real deployment gets,
+        # so CI exercises it rather than forcing a native build.
         run: npm ci --no-audit --no-fund
 
       - name: Typecheck
@@ -67,5 +56,25 @@ jobs:
         run: npm run build
 
       - name: Verify the built CLI runs
-        if: matrix.package == 'packages/node'
         run: node lib/agent-cli.js --describe
+
+      # The subpath entries are the package's public surface: an adapter that
+      # stops resolving would break every deployment while the root import kept
+      # working, so each one is imported by name rather than assumed.
+      - name: Verify every entry point resolves
+        run: |
+          node -e "
+          Promise.all([
+            import('@shaowenchen/dsh-node'),
+            import('@shaowenchen/dsh-node/fs'),
+            import('@shaowenchen/dsh-node/subprocess'),
+          ]).then(([root, fs, sub]) => {
+            for (const [name, mod] of [['.', root], ['./fs', fs], ['./subprocess', sub]]) {
+              if (typeof mod.default !== 'function') {
+                console.error(name + ' did not export a plugin class')
+                process.exit(1)
+              }
+              console.log(name + ' -> ' + mod.default.name)
+            }
+          })
+          "

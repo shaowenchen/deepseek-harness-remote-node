@@ -25,8 +25,8 @@ import type { Socket } from 'node:net'
 import { Context } from '@deepseek-ai/cordis'
 import type { SubprocessHandle, SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
-import { NodeAgent, NodeRegistry } from '@shaowenchen/dsh-node'
-import NodeSubprocessRuntime from '../src/index.ts'
+import { NodeAgent, NodeRegistry } from '../src/index.ts'
+import NodeSubprocessRuntime from '../src/subprocess-node.ts'
 
 type UpgradeHandler = (req: IncomingMessage, socket: Socket, head: Buffer) => void
 

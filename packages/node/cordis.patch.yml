@@ -11,6 +11,18 @@
 # Exactly one execution world may exist. Disabling the local filesystem
 # provider is what makes the node authoritative rather than merely present;
 # leaving both mounted is a composition error, not a fallback.
+#
+# The two adapters live in this same package, behind subpath entry points, so
+# mounting them needs no second install:
+#
+#   - id: fs-node
+#     name: '@shaowenchen/dsh-node/fs'
+#   - id: subprocess-node
+#     name: '@shaowenchen/dsh-node/subprocess'
+#
+# They are listed here as comments rather than mounted, because either one
+# taken alone changes where the agent's work happens, and that is a decision
+# about the deployment rather than a default this bundle should impose.
 
 - insert:
     - id: node-registry

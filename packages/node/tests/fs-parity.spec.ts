@@ -24,9 +24,8 @@ import type { Socket } from 'node:net'
 import { Context } from '@deepseek-ai/cordis'
 import { FsError, type FsErrorCode, type FsTarget } from '@deepseek-ai/dsh-fs'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
-import { NodeAgent } from '@shaowenchen/dsh-node'
-import { NodeRegistry } from '@shaowenchen/dsh-node'
-import NodeFileSystem from '../src/index.ts'
+import { NodeAgent, NodeRegistry } from '../src/index.ts'
+import NodeFileSystem from '../src/fs-node.ts'
 
 type UpgradeHandler = (req: IncomingMessage, socket: Socket, head: Buffer) => void
 
@@ -64,7 +63,7 @@ async function codeOf(run: () => Promise<unknown>): Promise<FsErrorCode | undefi
 
 beforeEach(async () => {
   sockets.length = 0
-  world = await mkdtemp(join(tmpdir(), 'dsh-fs-node-parity-'))
+  world = await mkdtemp(join(tmpdir(), 'dsh-fs-parity-'))
 
   // The reference backend lives on its OWN context: both providers register as
   // `ctx.fs`, and a context can hold exactly one. Two separate worlds is also

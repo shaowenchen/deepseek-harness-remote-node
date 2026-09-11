@@ -61,6 +61,7 @@ fi
 
 PROFILE_DIR="$DSH_HOME/profiles/web"
 SCOPE_DIR="$PROFILE_DIR/node_modules/@shaowenchen"
+LINK_PATH="$SCOPE_DIR/dsh-node"
 PATCH_FILE="$PROFILE_DIR/cordis.patch.yml"
 
 say() { printf '%s\n' "$*"; }
@@ -123,37 +124,25 @@ fi
 # ── 3. Build ─────────────────────────────────────────────────────────────────
 # `npm ci` when a lockfile is present so the install is reproducible.
 #
-# All three packages are built and linked, in dependency order: the two adapters
-# resolve `@shaowenchen/dsh-node` through a `file:../node` dependency, so the
-# agent must be built before them. Linking only the agent would leave a channel
-# that nothing reads from.
-REPO_DIR=$(dirname -- "$(dirname -- "$PKG_DIR")")
-ADAPTER_DIRS="fs-node subprocess-node"
-
+# One package carries all three entry points — the registry and both adapters —
+# so there is nothing to build in dependency order.
 say "[2/5] installing dependencies and building"
-build_package() {
-  pkg="$1"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    say "  would: npm ci (or npm install) and npm run build in $pkg"
-    return
-  fi
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
+else
   command -v npm >/dev/null 2>&1 || die "npm is required to build; install Node 22+ first"
-  if [ -f "$pkg/package-lock.json" ]; then
-    ( cd "$pkg" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
+  if [ -f "$PKG_DIR/package-lock.json" ]; then
+    ( cd "$PKG_DIR" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
   else
-    ( cd "$pkg" && npm install --no-audit --no-fund >/dev/null )
+    ( cd "$PKG_DIR" && npm install --no-audit --no-fund >/dev/null )
   fi
-  ( cd "$pkg" && npm run build >/dev/null )
-  [ -f "$pkg/lib/index.js" ] || die "build produced no lib/index.js in $pkg"
-}
-build_package "$PKG_DIR"
-for adapter in $ADAPTER_DIRS; do
-  if [ -f "$REPO_DIR/packages/$adapter/package.json" ]; then
-    build_package "$REPO_DIR/packages/$adapter"
-  else
-    say "      note: packages/$adapter not present in this revision — skipping"
-  fi
-done
+  ( cd "$PKG_DIR" && npm run build >/dev/null )
+  [ -f "$PKG_DIR/lib/index.js" ] || die "build produced no lib/index.js"
+  # The adapters are the point of the package; a build that dropped them would
+  # otherwise install cleanly and simply never work.
+  [ -f "$PKG_DIR/lib/fs-node.js" ] || die "build produced no lib/fs-node.js"
+  [ -f "$PKG_DIR/lib/subprocess-node.js" ] || die "build produced no lib/subprocess-node.js"
+fi
 say "      ok"
 
 # ── 4. Link into the profile ─────────────────────────────────────────────────
@@ -162,27 +151,16 @@ say "      ok"
 # instance.
 say "[3/5] linking into the web profile"
 run mkdir -p "$SCOPE_DIR"
-link_package() {
-  name="$1"; src="$2"
-  target="$SCOPE_DIR/$name"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    say "  would: link $src -> $target"
-    return
-  fi
+if [ "$DRY_RUN" -eq 0 ]; then
   # Replace any previous link, but never delete a real directory someone else
   # may own: refuse instead, so an unexpected layout surfaces rather than being
   # silently destroyed.
-  if [ -e "$target" ] && [ ! -L "$target" ]; then
-    die "$target exists and is not a symlink; move it aside first"
+  if [ -e "$LINK_PATH" ] && [ ! -L "$LINK_PATH" ]; then
+    die "$LINK_PATH exists and is not a symlink; move it aside first"
   fi
-  rm -f "$target"
-  ln -s "$src" "$target"
-}
-link_package dsh-node "$PKG_DIR"
-for adapter in $ADAPTER_DIRS; do
-  [ -f "$REPO_DIR/packages/$adapter/package.json" ] || continue
-  link_package "dsh-$adapter" "$REPO_DIR/packages/$adapter"
-done
+  rm -f "$LINK_PATH"
+  ln -s "$PKG_DIR" "$LINK_PATH"
+fi
 say "      ok"
 
 # ── 5. Register the plugin in the patch layer ────────────────────────────────
@@ -211,11 +189,13 @@ else
     printf -- '        onDisconnect: orphan\n'
     # The two adapters are what actually move the execution world: without them
     # the registry is a channel nothing reads from, and the host's own
-    # filesystem and subprocess providers keep serving the agent.
+    # filesystem and subprocess providers keep serving the agent. They live in
+    # this same package, behind subpath entry points, so no second install is
+    # involved.
     printf -- '    - id: fs-node\n'
-    printf -- "      name: '@shaowenchen/dsh-fs-node'\n"
+    printf -- "      name: '@shaowenchen/dsh-node/fs'\n"
     printf -- '    - id: subprocess-node\n'
-    printf -- "      name: '@shaowenchen/dsh-subprocess-node'\n"
+    printf -- "      name: '@shaowenchen/dsh-node/subprocess'\n"
   } >> "$PATCH_FILE"
   say "      ok"
 fi

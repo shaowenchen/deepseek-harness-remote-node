@@ -105,23 +105,29 @@ Source imports carry explicit `.ts` extensions (`./agent.ts`) and include the
    if it takes a new prefix).
 2. Implement it on the node in `src/fs-ops.ts` (or a sibling module), mapping
    Node's errno onto the protocol's error vocabulary with `classify`.
-3. Add it to `IMPLEMENTED_OPERATIONS` and the `execute` switch in `src/agent.ts`.
+3. Add it to `implementedOperations()` and the `execute` switch in `src/agent.ts`.
 4. Test it through a real registered agent, asserting both the success path and
    its failure codes.
 
-Operations are added to the agent first, then consumed by an adapter in
-`packages/fs-node` (or its `subprocess` sibling when it exists). Adding one is
-three edits, not one: the protocol vocabulary, the node-side implementation, and
-the adapter method that forwards it.
+Operations are added to the agent first, then consumed by an adapter —
+`src/fs-node.ts` or `src/subprocess-node.ts`. Adding one is three edits, not
+one: the protocol vocabulary, the node-side implementation, and the adapter
+method that forwards it.
 
-### The adapter must not drift from the node
+### The adapters must not drift from the node
 
-`packages/fs-node` claims that `ctx.fs` behaves the same served remotely as it
-does locally, and `tests/parity.spec.ts` holds it to that by running the same
-operations against the real `@deepseek-ai/dsh-fs-local` and comparing what a
-caller observes. When you change a filesystem semantic, change it in both
-places and let the parity suite prove they still agree — an assertion here is
-worth more than a matching comment.
+`src/fs-node.ts` claims that `ctx.fs` behaves the same served remotely as it
+does locally, and `src/subprocess-node.ts` claims the same for `ctx.subprocess`.
+`tests/fs-parity.spec.ts` and `tests/subprocess-parity.spec.ts` hold them to it
+by running the same operations against the real `@deepseek-ai/dsh-fs-local` and
+`@deepseek-ai/dsh-subprocess-local` and comparing what a caller observes. When
+you change a semantic, change it in both places and let the parity suite prove
+they still agree — an assertion here is worth more than a matching comment.
+
+That comparison is the reason a few constants match upstream byte for byte. The
+collected-output cap trims to *exactly* the caller's limit, slicing inside a
+chunk, because the local backend does; keeping whole chunks would return a
+different tail for the same stream and no caller would know why.
 
 Guards stay on the node. `writeText` and `editText` are single operations
 because the version check has to happen in the same critical section as the

@@ -6,6 +6,25 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The three packages are now one.** `@shaowenchen/dsh-node` carries all three
+  entry points — the registry at `.`, the filesystem adapter at `./fs`, and the
+  subprocess adapter at `./subprocess` — so `@shaowenchen/dsh-fs-node` and
+  `@shaowenchen/dsh-subprocess-node` no longer exist. Neither was ever
+  published, so nothing depended on them.
+
+  What this buys: one install, one version to keep in step, and one lockfile.
+  What it deliberately does not change: the entry points stay separate rather
+  than collapsing into one auto-mounting plugin, because either adapter alone
+  already moves where the agent's work happens — a deployment decision, not a
+  default. The `dsh-*` seam packages are now **optional** peers, so a
+  composition mounting only `ctx.fs` does not need `dsh-subprocess` installed.
+
+  The layout follows upstream: `@deepseek-ai/dsh-agent` likewise exposes `.` and
+  `./invariant`, and a dsh bundle patch mounts it as
+  `name: '@deepseek-ai/dsh-agent/invariant'`.
+
 ### Added
 
 - **The `proc.*` family** — ordinary processes, executed on the node over
@@ -19,11 +38,11 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tty.close` are implemented. `tty.*` is advertised **only when a PTY substrate
   loads**, so a machine without a usable native build reports those operations as
   unimplemented instead of failing at the first terminal.
-- **`@shaowenchen/dsh-subprocess-node`** — the adapter that serves
-  `ctx.subprocess` from the node, so commands, terminals, and language servers
-  run on the remote machine. Its behaviour is verified against the real
-  `@deepseek-ai/dsh-subprocess-local` over the same operations, including process
-  trees, output caps, piped streams, and real terminals.
+- **The `ctx.subprocess` adapter** (entry point `@shaowenchen/dsh-node/subprocess`)
+  — serves commands, terminals, and language servers from the node. Its behaviour
+  is verified against the real `@deepseek-ai/dsh-subprocess-local` over the same
+  operations, including process trees, output caps, piped streams, and real
+  terminals.
 - **Bounded collected output with spill recovery.** A collected stream keeps an
   in-memory window trimmed to EXACTLY the cap, reports when it dropped the head,
   and optionally keeps the complete stream in a spill file. Trimming matches the

@@ -16,6 +16,14 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./fs": {
+      "types": "./lib/types/fs-node.d.ts",
+      "default": "./lib/fs-node.js"
+    },
+    "./subprocess": {
+      "types": "./lib/types/subprocess-node.d.ts",
+      "default": "./lib/subprocess-node.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -62,23 +70,36 @@
     "@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-subprocess": "^0.1.2-rc.1"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-fs": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-subprocess": {
+      "optional": true
+    }
+  },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.2",
     "ws": "^8.21.3"
   },
+  "optionalDependencies": {
+    "node-pty": "^1.2.0-beta.15"
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
     "@deepseek-ai/dsh-fs": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-fs-local": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-host-webserver": "^0.1.2-rc.1",
     "@deepseek-ai/dsh-subprocess": "^0.1.2-rc.1",
+    "@deepseek-ai/dsh-subprocess-local": "^0.1.2-rc.1",
     "@types/node": "^22.10.2",
     "@types/ws": "^8.5.13",
     "typescript": "^5.7.2"
   },
   "engines": {
     "node": ">=22"
-  },
-  "optionalDependencies": {
-    "node-pty": "^1.2.0-beta.15"
   }
 }

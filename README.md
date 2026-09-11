@@ -20,10 +20,25 @@ No inbound port. No public address. No NAT traversal on the remote side.
 | ✅ **Works** | Channel, registration, heartbeat, fail-closed semantics, and the full `fs.*` operation family — tested end-to-end against a real HTTP server, real upgrades, and real sockets. |
 | ✅ **Works** | The full `proc.*` family (commands) — real process trees with tree-scoped `SIGTERM`→grace→`SIGKILL` escalation, bounded collected output with spill recovery, and live stdin. |
 | ✅ **Works** | The full `tty.*` family (terminals) — real PTYs, resize, and foreground-group signalling. Requires a PTY substrate on the node; see below. |
-| ✅ **Works** | **`@shaowenchen/dsh-fs-node`** — the adapter that serves `ctx.fs` from the node, so the agent's file operations actually happen there. Its behaviour is verified against the real local backend. |
-| ✅ **Works** | **`@shaowenchen/dsh-subprocess-node`** — the adapter that serves `ctx.subprocess` from the node, so commands, terminals, and language servers run there too. Verified against `dsh-subprocess-local`. |
+| ✅ **Works** | **`@shaowenchen/dsh-node/fs`** — the adapter that serves `ctx.fs` from the node, so the agent's file operations actually happen there. Its behaviour is verified against the real local backend. |
+| ✅ **Works** | **`@shaowenchen/dsh-node/subprocess`** — the adapter that serves `ctx.subprocess` from the node, so commands, terminals, and language servers run there too. Verified against `dsh-subprocess-local`. |
 | ⚠️ **Conditional** | `tty.*` needs a usable **`node-pty`** on the node. `node-pty` is an *optional* dependency, so an install without a native build still works — the agent then advertises `fs.*` and `proc.*` only. |
-| ⚠️ **Not published** | No package is **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
+| ⚠️ **Not published** | Not **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
+
+One package carries all three entry points — the registry and both adapters —
+so installing it once is enough:
+
+| Entry point | What it mounts |
+|---|---|
+| `@shaowenchen/dsh-node` | `ctx.nodeRegistry`: the channel, identity, and heartbeat |
+| `@shaowenchen/dsh-node/fs` | `ctx.fs` |
+| `@shaowenchen/dsh-node/subprocess` | `ctx.subprocess` |
+
+They are separate entry points rather than one auto-mounting bundle because
+either adapter taken alone already changes where the agent's work happens. That
+is a decision about the deployment, not a default a package should impose. It
+also keeps the `dsh-*` seam packages optional: a composition that mounts only
+`ctx.fs` never needs `dsh-subprocess` installed.
 
 The agent advertises only what it implements, so the host refuses unimplemented
 operations early with `unsupported` rather than hanging on them — see
@@ -72,22 +87,22 @@ third-party cloud SDK" with "a protocol we define".
 ## How it works
 
 ```
-        ┌──────────────────────────────────────────────┐
-        │  dsh host                                    │
-        │                                              │
-        │  webServer  :3080                            │
-        │    ├ /api/remote.mux   ← browser mux         │
-        │    └ /node/v1          ← node channel        │
-        │                                              │
-        │  ctx.nodeRegistry ──── dsh-node              │
-        │  ctx.fs ........... dsh-fs-node              │
-        │  ctx.subprocess ... dsh-subprocess-node      │
-        └───────────────────▲──────────────────────────┘
-                            │ wss, dialled OUT by the node
-        ┌───────────────────┴──────────────────────────┐
-        │  remote machine — dsh-node agent             │
-        │  filesystem · processes · terminals          │
-        └──────────────────────────────────────────────┘
+        ┌───────────────────────────────────────────────────────┐
+        │  dsh host                                             │
+        │                                                       │
+        │  webServer  :3080                                     │
+        │    ├ /api/remote.mux   ← browser mux                  │
+        │    └ /node/v1          ← node channel                 │
+        │                                                       │
+        │  ctx.nodeRegistry ── @shaowenchen/dsh-node            │
+        │  ctx.fs ........... @shaowenchen/dsh-node/fs          │
+        │  ctx.subprocess ... @shaowenchen/dsh-node/subprocess  │
+        └───────────────────────▲───────────────────────────────┘
+                                │ wss, dialled OUT by the node
+        ┌───────────────────────┴───────────────────────────────┐
+        │  remote machine — dsh-node agent                      │
+        │  filesystem · processes · terminals                   │
+        └───────────────────────────────────────────────────────┘
 ```
 
 Both capability seams point at the node, which is what makes this machine an
@@ -241,6 +256,10 @@ the file, it may carry unrelated patches):
         cwd: /srv/workspace
         heartbeatIntervalMs: 2000
         onDisconnect: orphan
+    - id: fs-node
+      name: '@shaowenchen/dsh-node/fs'
+    - id: subprocess-node
+      name: '@shaowenchen/dsh-node/subprocess'
 ```
 
 </details>
@@ -309,13 +328,16 @@ npm run build       # emits lib/ and lib/types/
 node lib/agent-cli.js --describe
 ```
 
-12 cases over a real HTTP server, real upgrades, and real sockets — including the
-fail-closed suite and a filesystem round-trip driven by a real agent. The suite
+57 cases over a real HTTP server, real upgrades, real sockets, real process
+trees, and real PTYs — the fail-closed suite, a filesystem round-trip driven by
+a real agent, process and terminal integration, and two parity suites that
+compare this package against the dsh local backends it must match. The suite
 needs no test framework: Node's built-in runner strips the TypeScript types
-itself, so the only runtime dependency is `ws`.
+itself, so the runtime dependencies are only `ws` and the dsh packages it
+builds against.
 
-CI runs that same sequence plus a CLI smoke test on every push
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+CI runs that same sequence plus a CLI smoke test and an entry-point check on
+every push ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ### Layout
 
@@ -328,19 +350,15 @@ packages/node/                      # the published package: @shaowenchen/dsh-no
 │   ├── fs-ops.ts                   # filesystem semantics, executed on the node
 │   ├── proc-ops.ts                 # process trees, escalation, bounded output collection
 │   ├── tty-ops.ts                  # PTY terminals, loaded lazily (node-pty is optional)
+│   ├── fs-node.ts                  # entry point ./fs: implements ctx.fs over the channel
+│   ├── subprocess-node.ts          # entry point ./subprocess: implements ctx.subprocess
 │   └── agent-cli.ts                # the `dsh-node` entry point
 ├── tests/
 │   ├── fail-closed.spec.ts         # the safety property, over real sockets
-│   └── proc-tty.spec.ts            # process trees and real PTYs, end to end
+│   ├── proc-tty.spec.ts            # process trees and real PTYs, end to end
+│   ├── fs-parity.spec.ts           # ctx.fs vs the real dsh-fs-local
+│   └── subprocess-parity.spec.ts   # ctx.subprocess vs the real dsh-subprocess-local
 └── cordis.patch.yml                # the bundle patch a dsh deployment mounts
-
-packages/fs-node/                   # @shaowenchen/dsh-fs-node
-├── src/index.ts                    # NodeFileSystem: implements ctx.fs over the channel
-└── tests/parity.spec.ts            # checked against the real dsh-fs-local
-
-packages/subprocess-node/           # @shaowenchen/dsh-subprocess-node
-├── src/index.ts                    # NodeSubprocessRuntime: implements ctx.subprocess
-└── tests/parity.spec.ts            # checked against the real dsh-subprocess-local
 
 scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
 scripts/install-node.sh             # remote-machine agent installer, same idea
@@ -348,7 +366,7 @@ scripts/install-node.sh             # remote-machine agent installer, same idea
 SECURITY.md · CONTRIBUTING.md · CHANGELOG.md
 ```
 
-With all three packages mounted, the two capability seams that define an
+With every entry point mounted, the two capability seams that define an
 execution world both point at the remote machine, which is the goal the design
 document sets out.
 

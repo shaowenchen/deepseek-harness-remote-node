@@ -33,7 +33,7 @@ body:
         - Terminal operations (tty.*)
         - Channel, lifecycle, or heartbeat
         - Authentication or enrollment
-        - Adapters (dsh-fs-node / dsh-subprocess-node)
+        - Adapters (ctx.fs / ctx.subprocess over a node)
         - Tooling, docs, or packaging
         - Other
     validations:

@@ -1,7 +1,7 @@
 /**
  * `ctx.subprocess` backed by a remote node.
  *
- * This is the second half of the execution world `@shaowenchen/dsh-fs-node`
+ * This is the second half of the execution world `@shaowenchen/dsh-node/fs`
  * starts. With both mounted, the agent's commands, terminals, and language
  * servers run on the remote machine exactly as its file operations do — and the
  * two describe ONE world, which is the invariant the harness's architecture
@@ -34,7 +34,7 @@
  * says so at registration and this adapter surfaces `unsupported` rather than
  * silently degrading a terminal into a pipe, which would change how the user's
  * shell behaves without telling anyone.
- * @module @shaowenchen/dsh-subprocess-node
+ * @module @shaowenchen/dsh-node/subprocess
  */
 
 import { Readable, Writable } from 'node:stream'
@@ -55,13 +55,13 @@ import {
   type SubprocessTerminalSignal,
   type SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
-import { NodeError, type NodeRegistry, type NodeStream } from '@shaowenchen/dsh-node'
+import { NodeError, type NodeRegistry, type NodeStream } from './index.ts'
 
 /** Plugin configuration. */
 export interface Config {
   /**
    * Accepted for symmetry with the local backend and deliberately unused; see
-   * the equivalent note in `@shaowenchen/dsh-fs-node`. The execution world's
+   * the equivalent note in `@shaowenchen/dsh-node/fs`. The execution world's
    * working directory belongs to the NODE.
    */
   cwd?: string

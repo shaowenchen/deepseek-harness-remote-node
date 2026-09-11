@@ -3,7 +3,7 @@
  * world, reachable over an inbound WebSocket the node itself dials.
  *
  * This service owns identity, the channel, liveness, and generation. It owns no
- * filesystem or process meaning — `dsh-fs-node` and `dsh-subprocess-node`
+ * filesystem or process meaning — the `./fs` and `./subprocess` entry points
  * translate the capability seams onto {@link NodeRegistry.open}. That split is
  * the same one the E2B family uses: one lifecycle owner, two adapters, neither
  * creating its own world.
