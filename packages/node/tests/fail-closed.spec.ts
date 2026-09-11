@@ -612,6 +612,73 @@ describe('a refusal is answered according to whether retrying can help', () => {
     }
   })
 
+  /**
+   * Surviving a refusal is not enough: the WAIT has to be the size it says it
+   * is. A `busy` refusal is answered by a timer, and the host then closes the
+   * socket it just refused — so the close handler runs for the same attempt and
+   * arms a second timer. One assignment overwrote the other's handle without
+   * clearing it, both fired, and each of the two next attempts armed two more:
+   * the dial rate doubled every `busyRetryMs` and the node flooded the host
+   * with registrations it already knew would be refused. The test above passed
+   * throughout, because "attempts >= 2" is satisfied by a hundred attempts.
+   *
+   * So this pins the RATE, measured over a window long enough to catch a
+   * multiple. A live incumbent holds the slot and answers pings, so the
+   * heartbeat never reaps it and every attempt in the window is refused.
+   */
+  it('dials at the retry interval, not faster, for as long as the slot is held', async () => {
+    await mount(world, { credential: 'test-credential' })
+    const lines: string[] = []
+    // A real incumbent that stays healthy, so the slot is genuinely occupied
+    // rather than frozen and the refusals keep coming for the whole window.
+    const incumbent = await registerNode('long-contended')
+    assert.equal(incumbent.frame.type, 'ready')
+    const heldGeneration = incumbent.frame.generation as number
+
+    const busyRetryMs = 250
+    const agent = new NodeAgent({
+      url: `ws://127.0.0.1:${port}/node/v1`,
+      nodeId: 'long-contended',
+      credential: 'test-credential',
+      cwd: world,
+      // Far below `busyRetryMs`, mirroring the shipped defaults (500ms against
+      // 5000ms). The ratio is what gives the test teeth: a reconnect timer
+      // armed beside a busy one only multiplies if it fires inside the busy
+      // wait, and a backoff longer than the window would hide the bug entirely.
+      reconnectMinMs: 25,
+      reconnectMaxMs: 25,
+      busyRetryMs,
+      log: (message) => { lines.push(message) },
+    })
+    agent.start()
+    try {
+      const attempts = () => lines.filter((l) => l.includes('connecting to')).length
+      await waitFor(() => attempts() >= 1, 'the first attempt')
+
+      // Measure the rate over a window several intervals wide. Under the
+      // doubling bug this window held 2^n attempts; correct behaviour holds
+      // very close to WINDOW / busyRetryMs.
+      const WINDOW = busyRetryMs * 8
+      const before = attempts()
+      await new Promise((resolve) => { setTimeout(resolve, WINDOW) })
+      const dials = attempts() - before
+      const ceiling = Math.ceil(WINDOW / busyRetryMs) + 2
+
+      assert.ok(
+        dials <= ceiling,
+        `expected at most ${ceiling} dials in ${WINDOW}ms at a ${busyRetryMs}ms interval, `
+        + `got ${dials} — the retry timer is being armed more than once per wait.\n`
+        + `Got:\n${lines.map((l) => `  ${l}`).join('\n')}`,
+      )
+      // And the slot is still the incumbent's: every one of those dials was
+      // refused without disturbing the connection holding it.
+      assert.equal(ctx.nodeRegistry.current?.generation, heldGeneration)
+    } finally {
+      agent.stop()
+      incumbent.ws.terminate()
+    }
+  })
+
   it('stops on an auth refusal, which retrying cannot fix, and says why', async () => {
     await mount(world, { credential: 'the-real-credential' })
     const lines: string[] = []

@@ -138,6 +138,34 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The `busy` retry dialled the host in a flood, not on its interval.** Two
+  schedulers arm the one retry timer and neither cleared the other's handle. A
+  `busy` refusal arms a `busyRetryMs` timer — and the host then CLOSES the
+  socket it refused, so the close handler runs for the same attempt and calls
+  `scheduleReconnect`, assigning over `this.retry` without clearing it. Both
+  timers then fired, so one wait produced two attempts, each of which armed two
+  more: the dial rate doubled every cycle until the process was hammering the
+  host. Measured against a real registry holding the slot, a node went from the
+  intended 1 dial per interval to **81 dials in the sixth second** — 161
+  refusals where 6 were wanted.
+
+  Nothing in the log said "runaway": the host prints one `refused [busy]` per
+  attempt, and the output of a storm is the same line as the output of a slow
+  retry, only denser. What the operator saw was a node that "kept disconnecting"
+  after running a while, which is what a flood of refused registrations looks
+  like from the far side.
+
+  There is now one timer, armed through a single `armRetry` that clears the
+  handle it replaces, and a `busy` wait is not displaced by a reconnect
+  scheduled for the connection the refusal just closed.
+
+  The existing test passed throughout, because it asserted `attempts >= 2` —
+  true of a hundred attempts as easily as of two. The regression test pins the
+  RATE over a window several intervals wide, with a reconnect backoff shorter
+  than the busy interval so the doubling has room to express itself; that ratio
+  is what gives it teeth, and it fails at 1671 dials against a ceiling of 10
+  when the fix is reverted.
+
 - **A `busy` refusal killed the agent, turning a momentary race into a dead
   node.** Registration is single-slot, so a second connection for one node id is
   refused with `busy`. The agent treated every refusal as terminal — right for

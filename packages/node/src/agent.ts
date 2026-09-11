@@ -583,6 +583,17 @@ export class NodeAgent {
   private attempt = 0
   private retry: ReturnType<typeof setTimeout> | undefined
   /**
+   * Whether the pending {@link retry} is a `busy` wait.
+   *
+   * Tracked because the two paths that arm a timer want different outcomes and
+   * can both run for one connection attempt. A `busy` refusal arms a timer, and
+   * the host then CLOSES the socket it refused — so {@link scheduleReconnect}
+   * runs too, over the same attempt. Without this flag there is no way to tell
+   * that second timer it is redundant, and it is not merely redundant: it is
+   * the multiplier. See {@link armRetry}.
+   */
+  private retryIsBusyWait = false
+  /**
    * Settles {@link NodeAgent.run} when the agent stops for good.
    *
    * Set by `run()` and called by `stop()`, which is the single funnel every
@@ -680,6 +691,7 @@ export class NodeAgent {
     this.stopping = true
     if (this.retry) clearTimeout(this.retry)
     this.retry = undefined
+    this.retryIsBusyWait = false
     this.socket?.close(1000, 'agent stopping')
     this.socket = undefined
     this.finish?.()
@@ -851,11 +863,13 @@ export class NodeAgent {
         // flaps. Retrying breaks the cycle by making the loser wait rather than
         // die.
         if (frame.code === 'busy') {
+          // The order here is load-bearing: send the refusal to `armRetry`,
+          // which knows it must not let a reconnect timer be armed beside it.
           this.log(
             `registration refused [busy]: waiting ${this.opts.busyRetryMs}ms for the `
             + 'active connection to clear',
           )
-          this.retry = setTimeout(() => { this.connect() }, this.opts.busyRetryMs)
+          this.armRetry(this.opts.busyRetryMs, true)
           return
         }
         // `protocol` and `auth` are terminal for this process as configured: the
@@ -930,6 +944,14 @@ export class NodeAgent {
    */
   private scheduleReconnect(failure?: string): void {
     if (this.stopping) return
+    if (this.retryIsBusyWait) {
+      // This teardown is the close of a socket the host already refused as
+      // `busy`: a refusal is followed by a close, so both the refusal handler
+      // and this one run for a single attempt. The retry is already pending and
+      // it is the better-informed one, so arming another here would dial twice
+      // for one wait.
+      return
+    }
     const ceiling = Math.min(
       this.opts.reconnectMaxMs,
       this.opts.reconnectMinMs * 2 ** this.attempt,
@@ -949,7 +971,34 @@ export class NodeAgent {
     // loop alive is gone. Node then finds an empty loop and exits silently,
     // mid-reconnect, exactly when the agent is most needed. `stop()` clears
     // this timer, which is what actually ends the process on request.
-    this.retry = setTimeout(() => { this.connect() }, delay)
+    this.armRetry(delay, false)
+  }
+
+  /**
+   * Arm the single reconnect timer, replacing any timer already pending.
+   *
+   * One timer per agent, cleared before it is replaced. Letting a second
+   * assignment overwrite the handle without clearing the first is not a leak of
+   * a timer: it is a leak of a DIAL. The overwritten timer still fires, so the
+   * next attempt is two attempts, each of which can arm two more, and the dial
+   * rate doubles per cycle until the process is a flood against the host.
+   * @param delay - milliseconds to wait before dialling again.
+   * @param busyWait - whether this wait is a `busy` refusal's.
+   */
+  private armRetry(delay: number, busyWait: boolean): void {
+    if (this.retry !== undefined) {
+      // A `busy` wait already pending loses to nothing: it is the longer delay,
+      // and it was armed by the refusal rather than by the teardown of the
+      // socket that carried that refusal.
+      if (this.retryIsBusyWait && !busyWait) return
+      clearTimeout(this.retry)
+    }
+    this.retryIsBusyWait = busyWait
+    this.retry = setTimeout(() => {
+      this.retry = undefined
+      this.retryIsBusyWait = false
+      this.connect()
+    }, delay)
   }
 }
 
