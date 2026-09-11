@@ -102,48 +102,17 @@ each other, so a second connection is refused with `busy` rather than merged.
 
 Node **22+** required. Not on npm yet, so both sides install from GitHub.
 
-### GitHub is unreachable? Use a mirror
-
-Both installers fetch from `github.com`, and both bootstraps come from
-`raw.githubusercontent.com`. Neither host is reliable from mainland China. **If
-they do not resolve for you, do not skip the step — add `--proxy`.**
-
-Any mirror that prepends works. The mirror's URL goes in front of the GitHub URL,
-with the scheme and host kept intact:
-
-```
---proxy https://ghproxy.chenshaowen.com
-  → https://ghproxy.chenshaowen.com/https://github.com/…/archive/master.tar.gz
-```
-
-For the node, that is the whole install:
-
-```sh
-curl -fsSL https://ghproxy.chenshaowen.com/https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
-  | sh -s -- --proxy https://ghproxy.chenshaowen.com
-```
-
-**Both halves are needed.** The `curl` prefix has to be written out by hand — the
-script is not on the machine yet, so no flag inside it can carry the bootstrap —
-and `--proxy` then covers the source tarball the script downloads for itself.
-Do only the first and the install stalls at step 1; do only the second and there
-is nothing to stall, because the script never arrived.
-
-`--proxy` also works with `--ref`, and `DSH_PROXY` sets it for a whole session so
-the flag is not needed on every run:
-
-```sh
-DSH_PROXY=https://ghproxy.chenshaowen.com ./install-host.sh
-```
-
-`ghproxy.chenshaowen.com` is the mirror used above; any mirror with the same
-prepend shape works in its place. With no proxy set, every URL is exactly what it
-was before.
+Every block below sets `PROXY`. Leave it empty when GitHub is reachable; if your
+network cannot reach it, set it to a mirror that prepends, e.g.
+`https://ghproxy.chenshaowen.com`.
 
 ### On the dsh host
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh | sh
+PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh" \
+  | sh -s -- --proxy "$PROXY"
 ```
 
 That downloads the package, builds it, links it into the dsh profile, and writes
@@ -151,16 +120,15 @@ the plugin config below into `$DSH_HOME/profiles/web/cordis.patch.yml`. It works
 inside the `deepseek-harness-web` container too, where no package manager exists.
 Skip to [On the node](#on-the-node) if you do not want to read the config.
 
-If `github.com` does not resolve from this machine, add a mirror — see
-[GitHub is unreachable? Use a mirror](#github-is-unreachable-use-a-mirror).
-
 **`--cwd` is a path on the NODE**, in the node's namespace — not this machine's.
 It defaults to `$HOME/.deepseek-harness-remote-node`, which is right for most
 setups; pass it when the work belongs somewhere else, such as a mounted volume:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
-  | sh -s -- --cwd /data/.deepseek-harness-remote-node
+PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh" \
+  | sh -s -- --cwd /data/.deepseek-harness-remote-node --proxy "$PROXY"
 ```
 
 It is **created if missing** — including parents — by the agent on the node, so
@@ -249,8 +217,10 @@ it says.
 Run this **on the machine that becomes the execution world**, then connect it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
-  | sh -s -- --bin-dir ~/.local/bin
+PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh" \
+  | sh -s -- --bin-dir ~/.local/bin --proxy "$PROXY"
 ```
 
 The only things it expects to find are a POSIX `sh`, `curl` and `tar` to fetch
@@ -261,11 +231,6 @@ a container, a Kubernetes pod — is fine. The build runs `npm install` and `tsc
 in `$XDG_CACHE_HOME/deepseek-harness-remote-node/<ref>`, so it needs registry
 access and room for `node_modules` (a few hundred MB); nothing is installed
 outside that cache and `--bin-dir`.
-
-If `github.com` does not resolve from this machine, add a mirror — see
-[GitHub is unreachable? Use a mirror](#github-is-unreachable-use-a-mirror). The
-node is often on a different network from the host, so it may need one even when
-the host did not.
 
 Then connect it. `wss://` here is the host's public address, not a local port:
 
@@ -289,11 +254,15 @@ on every registration.
 ### Removing it
 
 ```sh
+PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+
 # On the host — removes the plugin symlink and the config entries it added.
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/uninstall.sh | sh -s -- --host
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/uninstall.sh" \
+  | sh -s -- --host
 
 # On the node — removes the command and the cached source.
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/uninstall.sh | sh -s -- --node
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/uninstall.sh" \
+  | sh -s -- --node
 ```
 
 With no flags it undoes whichever half is present. **Restart dsh afterwards** —

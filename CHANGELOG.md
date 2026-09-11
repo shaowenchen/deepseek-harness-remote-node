@@ -31,9 +31,10 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   passed it is on a network where the direct URL does not work.
 
   The bootstrap is the one step a flag inside the script cannot carry — the
-  script is not on the machine yet — so the README shows the initial `curl`
-  prepending the mirror by hand, with `--proxy` passed afterwards so the source
-  tarball comes through the same mirror.
+  script is not on the machine yet — so the README's blocks set `PROXY` and
+  expand it in front of the bootstrap URL, leaving it empty for a network that
+  reaches GitHub, and pass the same value to `--proxy` so the source tarball
+  comes through the same mirror.
 
 - **Credential verification on the node channel.** The `hello` frame's
   `credential` was designed for, carried on the wire, and never read: before
