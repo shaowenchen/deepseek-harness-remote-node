@@ -191,11 +191,25 @@ say "      ok"
 # ── 5. Register the plugin in the patch layer ────────────────────────────────
 # Appended, never overwritten: the file may already carry unrelated patches, and
 # dsh's own documentation warns against replacing it.
+#
+# Re-running must converge, and the two halves of this file have OPPOSITE
+# duplicate rules — verified against dsh, not assumed:
+#
+#   * `- insert:` naming an id that is already inserted is a hard error
+#     ("duplicate loader entry id: node-registry"). So the insert block is
+#     written only when absent.
+#   * `- id: X` / `disabled: true` is a patch that merges. Writing it twice is
+#     harmless, and the composed config still shows the id exactly once.
+#
+# That asymmetry is why the disable block can simply be appended every run: the
+# operation is idempotent by construction, so a re-run repairs a half-finished
+# install instead of stopping and asking the operator to finish it by hand.
 say "[4/5] registering the node channel in the patch layer"
 if [ "$DRY_RUN" -eq 1 ]; then
-  say "  would: append the node-registry row to $PATCH_FILE"
+  say "  would: append the node-registry row to $PATCH_FILE if absent"
+  say "  would: append the disable block for the host providers"
 elif grep -q 'node-registry' "$PATCH_FILE" 2>/dev/null; then
-  say "      already registered — left untouched"
+  say "      node registry already registered — left untouched"
 else
   mkdir -p "$PROFILE_DIR"
   [ -f "$PATCH_FILE" ] || printf '[]\n' > "$PATCH_FILE"
@@ -236,7 +250,38 @@ else
   say "      ok"
 fi
 
-# ── 5b. Refuse to leave the host in a crash loop ─────────────────────────────
+# The disable block is written on EVERY run, not only when the insert block was
+# added. A `- id: X` / `disabled: true` entry merges with any earlier one (unlike
+# an `insert`, which errors on a duplicate id), so re-running is safe — and it is
+# what makes this script converge. An install that stopped after inserting the
+# adapters is left in a state dsh cannot boot; the next run repairs it in place
+# rather than reporting the problem and waiting to be told what to do.
+# The marker identifies OUR block, so re-running neither duplicates it nor
+# mistakes a similar entry the operator wrote for their own purposes. Matching on
+# the id alone would make the second run skip a block the user had deleted by
+# hand, leaving a broken composition the script then reports as unfixable.
+DISABLE_MARKER='# ── host execution world disabled (scripts/install-host.sh) ──'
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "  would: ensure the host-provider disable block is present in $PATCH_FILE"
+elif grep -qF "$DISABLE_MARKER" "$PATCH_FILE" 2>/dev/null; then
+  say "      host providers already disabled — left untouched"
+else
+  mkdir -p "$PROFILE_DIR"
+  {
+    printf '\n%s\n' "$DISABLE_MARKER"
+    printf '# A context holds exactly one ctx.fs and one ctx.subprocess, and the\n'
+    printf '# host'"'"'s providers mount first — leaving them enabled makes the node\n'
+    printf '# adapters fail to register and dsh exits 1 in a restart loop.\n'
+    printf '# Duplicate `disabled` entries merge, so this block is safe to repeat.\n'
+    printf -- '- id: fs-sandbox\n'
+    printf -- '  disabled: true\n'
+    printf -- '- id: subprocess\n'
+    printf -- '  disabled: true\n'
+  } >> "$PATCH_FILE"
+  say "      host providers disabled"
+fi
+
+# ── 5b. Verify the composition can boot ──────────────────────────────────────
 # A context holds exactly one ctx.fs and one ctx.subprocess. Mounting the node
 # adapters while the host's own providers are still enabled does not degrade to
 # "run it locally" — registration fails and the whole plugin tree refuses to
@@ -309,18 +354,24 @@ else
       if [ "$code" -eq 1 ]; then conflict="$conflict $id"; fi
     done
     if [ -n "$conflict" ]; then
+      # The disable block was just written, so this is not "the operator forgot".
+      # Something about this profile is not what the script assumes: a different
+      # id provides ctx.fs or ctx.subprocess here, or the patch file is not the
+      # one being read. Both need a human, and guessing would be worse.
       say ""
-      say "  !! CONFLICT: these host providers are still enabled:$conflict"
+      say "  !! these host providers are STILL enabled after writing the disable"
+      say "     block:$conflict"
       say ""
-      say "  dsh will NOT boot in this state. Append the block below to"
-      say "  $PATCH_FILE and restart:"
+      say "  The ids above are absent, or the patch file in use is not:"
+      say "      $PATCH_FILE"
       say ""
-      say "      - id: fs-sandbox"
-      say "        disabled: true"
-      say "      - id: subprocess"
-      say "        disabled: true"
+      say "  Find what actually provides these seams in this profile and disable"
+      say "  that id instead — the block this script writes is the common case,"
+      say "  not a universal one:"
       say ""
-      say "  Symptom if you skip it: dsh exits 1 in a restart loop with"
+      say "      dsh --profile web --dump-config | grep -B1 -A2 -E \'^(fs|subprocess)|dsh-fs|dsh-subprocess\'"
+      say ""
+      say "  If you leave it, dsh exits 1 in a restart loop with"
       say "  'service \"subprocess\" has been registered', and /node/v1 answers"
       say "  404 (or 502 behind a proxy) because the host never finished booting."
       say ""
@@ -333,57 +384,26 @@ fi
 # ── 6. Report what is still manual ───────────────────────────────────────────
 say "[5/5] done"
 say ""
-say "REQUIRED NEXT STEP — the host will NOT start without it."
+say "RESTART dsh. The patch layer is read at startup, so a running host has"
+say "not picked any of this up yet."
 say ""
-say "  Append the block below to $PATCH_FILE, then RESTART dsh."
+say "  Verify the route registered (expect 101, not 404 — plain curl cannot"
+say "  tell you this, because an upgrade never travels as a normal GET):"
 say ""
-say "  This is not optional and it is not a preference. A context may hold"
-say "  exactly one ctx.fs and one ctx.subprocess, and the host's own providers"
-say "  are mounted first — so leaving them in place makes the node adapters'"
-say "  registration fail and the whole plugin tree refuse to load:"
+say "      curl -s -o /dev/null -w \'%{http_code}\\n\' \\
+say "        -H \'Connection: Upgrade\' -H \'Upgrade: websocket\' \\
+say "        -H \'Sec-WebSocket-Version: 13\' \\
+say "        -H \'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\' \\
+say "        http://127.0.0.1:<port>/node/v1"
 say ""
-say "      service \"subprocess\" has been registered at <LocalSubprocessRuntime>"
-say ""
-say "  dsh then exits with code 1 and restarts in a loop. It does not fall"
-say "  back, and it does not run anything on the host in the meantime: there is"
-say "  no degraded mode here, only a host that cannot boot. (The earlier"
-say "  wording of this message claimed the host's providers would keep serving"
-say "  the agent until you appended the block. That was wrong, and it sent at"
-say "  least one deployment into a crash loop with a 404 on /node/v1.)"
+say "  Then connect the node below. If the host answers 101 locally but the"
+say "  node still cannot connect through a proxy, the remaining problem is the"
+say "  proxy forwarding the upgrade — not this composition."
 say ""
 say "  The consequence to accept knowingly: with the host's providers disabled,"
 say "  a node that is not connected means NO execution world at all. Every"
 say "  operation is refused with \`node is not connected\` rather than silently"
 say "  running on the host."
-say ""
-say "      - id: fs-sandbox"
-say "        disabled: true"
-say "      - id: subprocess"
-say "        disabled: true"
-say ""
-say "  Those are the ids the shipped web and headless profiles use. Check yours"
-say "  rather than assuming: a profile that mounts different providers needs"
-say "  those ids disabled instead, and naming the wrong one disables nothing."
-say ""
-say "      dsh --profile <name> --dump-config | grep -E 'id: (fs|subprocess)'"
-say ""
-say "  Confirm the composition resolves without booting:"
-say ""
-say "      dsh --profile web --dump-config | grep -A6 node-registry"
-say ""
-say "  The host's sandbox cannot confine the node, and it will not say so"
-say "  clearly. dsh-sandbox-local picks its runner (Seatbelt, bwrap, Landlock)"
-say "  from the platform dsh ITSELF runs on, then wraps commands that execute on"
-say "  the node — so a macOS host driving a Linux node emits 'sandbox-exec', a"
-say "  binary that is not there, and every command fails as if an executable"
-say "  were missing. Run the host with full-access mode until a sandbox provider"
-say "  for the node's platform is mounted:"
-say ""
-say "      DSH_PERMISSION_MODE=danger-full-access dsh web"
-say ""
-say "  Then start the host and connect the node:"
-say ""
-say "      dsh web"
 say ""
 say "  On the remote machine, use the SAME scheme this host is reachable on."
 say "  A host behind TLS needs wss://; ws:// to an HTTPS host is redirected and"
