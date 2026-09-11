@@ -117,12 +117,48 @@ fi
 # needs it, but npm skips devDependencies when NODE_ENV is production — the
 # normal setting for a deployment container. Without the flag this step failed
 # with `tsc: not found` on exactly those hosts.
+# Locate Node, preferring the PATH but falling back to a login shell.
+#
+# `command -v node` is not enough on a machine that manages Node with nvm: nvm
+# installs its shims by SOURCING nvm.sh from an interactive rc file, and a
+# non-interactive shell never runs that. So this script — often piped through
+# `ssh host 'sh -s'` — sees no node at all on a machine where `node -v` works
+# perfectly when the user types it. Asking the login shell for the answer is
+# what makes the two agree.
+#
+# The login shell is asked ONCE and its PATH adopted for this script, because
+# the build below needs `npm` too and both must come from the same place.
+find_node() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+  login_sh=""
+  for candidate in "$SHELL" zsh bash sh; do
+    [ -n "$candidate" ] || continue
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    resolved=$(env -i HOME="$HOME" USER="${USER:-}" "$candidate" -lic \
+      'command -v node && command -v npm && printf "%s" "$PATH"' 2>/dev/null | tail -1)
+    case "$resolved" in
+      */*node*|*bin*) login_sh="$candidate"; break ;;
+    esac
+  done
+  [ -n "$login_sh" ] || return 1
+  resolved=$(env -i HOME="$HOME" USER="${USER:-}" "$login_sh" -lic \
+    'printf "%s" "$PATH"' 2>/dev/null | tail -1)
+  [ -n "$resolved" ] || return 1
+  PATH="$resolved"
+  export PATH
+  command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1
+}
+
 say "[2/5] checking Node and building"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
 else
-  command -v node >/dev/null 2>&1 || die "node not found; install Node 22+ first"
-  command -v npm  >/dev/null 2>&1 || die "npm not found; install Node 22+ first"
+  if ! find_node; then
+    die "node and npm not found on PATH or via \$SHELL; install Node 22+ first"
+  fi
+  say "      node $(node -v) at $(command -v node)"
   major=$(node -p 'process.versions.node.split(".")[0]')
   [ "$major" -ge 22 ] || die "Node $major found, but 22+ is required"
   if [ -f "$PKG_DIR/package-lock.json" ]; then
