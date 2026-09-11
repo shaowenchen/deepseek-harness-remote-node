@@ -168,11 +168,43 @@ by default on no platform at all.
   disabled: true
 - id: subprocess
   disabled: true
+
+# The host's sandbox cannot confine the node.
+#
+# `dsh-sandbox-local` picks its confinement runner (Seatbelt on macOS, bwrap or
+# Landlock on Linux) from the platform of the machine dsh runs on — the HOST.
+# The commands it wraps then execute on the NODE. On a macOS host driving a
+# Linux node that means every command is wrapped in `sandbox-exec`, a macOS-only
+# binary, and every command fails with `spawn sandbox-exec ENOENT`.
+#
+# The node cannot be sandboxed by the host's provider, so pick one:
+#
+#   * Run the agent with a full-access mode, which takes the unconfined path
+#     (`dsh-bash-sandbox` returns to the plain local executor when the mode is
+#     `danger-full-access`). Appropriate when the node is a machine you own and
+#     the agent is already trusted with it:
+#
+#         DSH_PERMISSION_MODE=danger-full-access dsh web
+#
+#   * Or mount a sandbox provider for the node's platform instead of disabling
+#     anything — the seam is a capability, and this package is one of several
+#     possible providers.
+#
+# Until one of those is in place the node will report a working channel and then
+# fail every command with a missing-executable error that names the wrong thing.
 ```
 
-The two adapters take no required options. They accept a `cwd` and deliberately
-ignore it: the working directory belongs to the node, and the registry already
-carries it. Mount only the adapters you want — the entry points are independent.
+The two adapters take no required options. They accept a `cwd` and ignore it: the
+working directory belongs to the node, and the registry already carries it. Mount
+only the adapters you want — the entry points are independent.
+
+**Where commands run.** The host sends its own idea of the working directory —
+the shell layer passes the session workspace, which is a path as the host sees
+it (`/Users/you/project`). The node checks that path against its own filesystem:
+if it exists there it is used as given, and if it does not it falls back to the
+directory the agent was started with. So a plain session works without anyone
+knowing the remote layout, and naming a real remote directory still means what
+it says.
 
 </details>
 
