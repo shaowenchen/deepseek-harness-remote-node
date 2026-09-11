@@ -100,7 +100,64 @@ each other, so a second connection is refused with `busy` rather than merged.
 
 ## Usage
 
-Node **22+** required. Not on npm yet, so both sides install from GitHub.
+Both installers are `sh` scripts that fetch the source and build it on the
+machine they run on. They need:
+
+| | Required | For |
+|---|---|---|
+| **Node 22+ and npm** | both machines | building the package |
+| `sh`, `curl`, `tar` | both machines | fetching and unpacking the source |
+
+Nothing else — no package manager, no root, no npm account. `npm` fetches from
+the public registry and needs a few hundred MB of scratch space under
+`$XDG_CACHE_HOME` to build in.
+
+<details>
+<summary>Installing Node 22 with nvm</summary>
+
+`nvm` installs Node into your home directory, so it needs no root and no
+distribution packages. Node 22 is the floor this project requires; 24 (the
+current LTS) is the better default.
+
+```sh
+export NVM_DIR="$HOME/.nvm"
+
+# -- the nvm installer --
+# METHOD=script downloads a tarball instead of git-cloning, so this works on a
+# machine with no git. PROFILE=/dev/null keeps it from editing your rc files.
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh \
+  | METHOD=script PROFILE=/dev/null bash
+
+. "$NVM_DIR/nvm.sh"
+
+# nodejs.org is frequently unreachable from the same networks github is. Point
+# nvm at a mirror — it serves the official prebuilt binaries, so nothing is
+# compiled and no toolchain is needed.
+export NVM_NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
+
+nvm install 22        # or 24, the current LTS
+node -v               # v22.x
+npm -v
+```
+
+Make it survive a new shell — append to `~/.bashrc` (or `~/.zshrc`):
+
+```sh
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+```
+
+If `npm install` then fails on the registry rather than on GitHub, point npm at
+a mirror too — this is a separate network path from the GitHub one:
+
+```sh
+npm config set registry https://registry.npmmirror.com
+```
+
+</details>
+
+Node runs the build, so **both** the host and the node need it; the node needs
+it at *run* time as well, since `dsh-node` is a Node program.
 
 Every block below starts with an empty `PROXY`. **If `github.com` is unreachable
 from that machine — mainland China, typically — set it to a mirror that
@@ -223,14 +280,12 @@ curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deeps
   | sh -s -- --bin-dir ~/.local/bin --proxy "$PROXY"
 ```
 
-The only things it expects to find are a POSIX `sh`, `curl` and `tar` to fetch
-the source, and Node **22+** with `npm` to build it. Everything comes from
-`PATH`; `$SHELL` is consulted only as a *fallback* for the case where a login rc
-file is what put `node` on the path (nvm), so a host that leaves `SHELL` unset —
-a container, a Kubernetes pod — is fine. The build runs `npm install` and `tsc`
-in `$XDG_CACHE_HOME/deepseek-harness-remote-node/<ref>`, so it needs registry
-access and room for `node_modules` (a few hundred MB); nothing is installed
-outside that cache and `--bin-dir`.
+The requirements are in [Usage](#usage); the one worth repeating here is that
+`node` and `npm` must be on `PATH` for a **non-interactive** shell. `$SHELL` is
+consulted only as a *fallback* for the case where a login rc file is what put
+`node` there (nvm), so a host that leaves `SHELL` unset — a container, a
+Kubernetes pod — is fine, but a machine where `node` is only defined in an
+interactive shell is not.
 
 Then connect it. `wss://` here is the host's public address, not a local port:
 
