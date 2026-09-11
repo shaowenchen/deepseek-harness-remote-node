@@ -8,6 +8,33 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`--proxy` on both installers, for a network that cannot reach GitHub.**
+  `github.com` and `raw.githubusercontent.com` are unreliable from mainland
+  China, and the installers fetch from both. `--proxy URL` (or `DSH_PROXY`)
+  names a mirror, and the whole GitHub URL is PREPENDED to it with the scheme
+  and host intact:
+
+      --proxy https://ghproxy.example
+        → https://ghproxy.example/https://github.com/…/archive/master.tar.gz
+
+  The naive concatenation is `$PROXY/$URL`, and the authority is split off
+  before joining rather than left in place: the result is parsed as a single
+  URL, so the `://` of the inner one has to survive as a path component. The
+  first version of this joined `${1%%://*}` — which is `https`, without the
+  colon — and produced a URL the mirror 404'd. Splitting the scheme first and
+  re-attaching it with the authority is what makes it parse.
+
+  A trailing slash on the proxy is tolerated, so both spellings work. The proxy
+  in effect is printed in the installer header on **every** path, including the
+  two that download nothing (a local checkout): a mirror that is set and
+  silently unused is the failure worth designing out, since the operator who
+  passed it is on a network where the direct URL does not work.
+
+  The bootstrap is the one step a flag inside the script cannot carry — the
+  script is not on the machine yet — so the README shows the initial `curl`
+  prepending the mirror by hand, with `--proxy` passed afterwards so the source
+  tarball comes through the same mirror.
+
 - **Credential verification on the node channel.** The `hello` frame's
   `credential` was designed for, carried on the wire, and never read: before
   this, registration was gated only by protocol version and the single-slot

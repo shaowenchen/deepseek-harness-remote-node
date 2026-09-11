@@ -102,6 +102,24 @@ each other, so a second connection is refused with `busy` rather than merged.
 
 Node **22+** required. Not on npm yet, so both sides install from GitHub.
 
+**On a network that cannot reach GitHub** — mainland China is the common one —
+pass `--proxy <mirror>` to either installer, or export `DSH_PROXY`. The mirror's
+URL is PREPENDED to the GitHub URL, with the scheme and host kept intact:
+
+```sh
+DSH_PROXY=https://ghproxy.example ./install-node.sh
+```
+
+That fetches `https://ghproxy.example/https://github.com/…/archive/master.tar.gz`.
+The bootstrap is the one step `--proxy` cannot carry — the script is not on this
+machine yet — so prepend it by hand for the initial fetch, and pass the flag
+afterwards so the install downloads the source through the same mirror:
+
+```sh
+curl -fsSL https://ghproxy.example/https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
+  | sh -s -- --proxy https://ghproxy.example
+```
+
 ### On the dsh host
 
 ```sh

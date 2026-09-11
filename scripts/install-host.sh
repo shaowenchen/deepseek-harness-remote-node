@@ -18,6 +18,10 @@
 #                      upper-case letter, one lower-case letter, and one digit.
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
+#   --proxy URL        Mirror to fetch GitHub through, PREPENDED to the URL:
+#                      --proxy https://ghproxy.example fetches
+#                      https://ghproxy.example/https://github.com/... (also
+#                      read from $DSH_PROXY)
 #   --dsh-home DIR     dsh home (default: $DSH_HOME, else ~/.dsh)
 #   --dry-run          Print what would happen, change nothing
 #   -h, --help         Show this help
@@ -51,6 +55,7 @@ WORKSPACE_CWD=""
 CREDENTIAL=""
 REF="master"
 SOURCE_DIR=""
+PROXY="${DSH_PROXY:-}"
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
@@ -60,6 +65,7 @@ while [ $# -gt 0 ]; do
     --credential) CREDENTIAL="$2"; shift 2 ;;
     --ref) REF="$2"; shift 2 ;;
     --source) SOURCE_DIR="$2"; shift 2 ;;
+    --proxy) PROXY="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
       sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
@@ -93,6 +99,25 @@ PATCH_FILE="$PROFILE_DIR/cordis.patch.yml"
 say() { printf '%s\n' "$*"; }
 run() { if [ "$DRY_RUN" -eq 1 ]; then say "  would: $*"; else "$@"; fi; }
 die() { echo "install-host: $*" >&2; exit 1; }
+
+# ── the GitHub mirror ────────────────────────────────────────────────────────
+# `--proxy URL` (or $DSH_PROXY) names a mirror that fetches GitHub for a network
+# that cannot reach it. The contract is PREPEND, not "an alternative host": the
+# whole original URL stays intact behind the prefix, and the authority is split
+# off first because the result is parsed as one URL, so a colon or a doubled
+# slash there is a malformed one rather than a path the mirror can strip again.
+#
+#   source: https://github.com/o/r                        (scheme + authority)
+#   rest:   /shaowenchen/deepseek-harness-remote-node     (path)
+#   out:    https://mirror/https://github.com/o/r         -- one slash joined
+gh_url() {
+  [ -n "$PROXY" ] || { printf '%s' "$1"; return; }
+  _scheme=${1%%://*}
+  _rest=${1#*://}
+  _authority=${_rest%%/*}
+  _path=${_rest#"$_authority"}
+  printf '%s/%s://%s%s' "${PROXY%/}" "$_scheme" "$_authority" "$_path"
+}
 
 # ── credential generation ────────────────────────────────────────────────────
 #
@@ -178,11 +203,18 @@ else
   PKG_DIR="$CACHE_DIR/$REF/packages/node"
   [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=${HOME:-/root}/.deepseek-harness-remote-node
 fi
+ARCHIVE_URL=$(gh_url "$REPO_URL/archive/$REF.tar.gz")
 
 say "deepseek-harness-remote-node installer"
 say "  source:  $SRC_KIND"
 say "  package: $PKG_DIR"
 say "  profile: $PROFILE_DIR"
+# Printed whenever a mirror is in play, on every path — including the two that
+# download nothing. A proxy that is set but silently unused is the failure worth
+# designing out: the operator who passed it is on a network where the direct URL
+# does not work, so "it is being honoured" has to be visible rather than
+# inferred from which URL the error message happened to name.
+[ -z "$PROXY" ] || say "  proxy:   $PROXY"
 [ "$DRY_RUN" -eq 1 ] && say "  (dry run — nothing will be written)"
 say ""
 
@@ -190,7 +222,7 @@ say ""
 if [ -z "$SOURCE_DIR" ] && [ ! -f "$CLONE_ROOT/packages/node/package.json" ]; then
   say "[1/5] downloading"
   if [ "$DRY_RUN" -eq 1 ]; then
-    say "  would: download $REPO_URL/archive/$REF.tar.gz"
+    say "  would: download $ARCHIVE_URL"
     say "  would: extract to $CACHE_DIR/$REF"
   else
     command -v curl >/dev/null 2>&1 || die "curl is required to download $REF"
@@ -213,9 +245,9 @@ if [ -z "$SOURCE_DIR" ] && [ ! -f "$CLONE_ROOT/packages/node/package.json" ]; th
     staging="$CACHE_DIR/.staging.$REF.$$"
     rm -rf "$staging"
     mkdir -p "$staging"
-    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$staging" --strip-components=1; then
+    if ! curl -fsSL "$ARCHIVE_URL" | tar -xz -C "$staging" --strip-components=1; then
       rm -rf "$staging"
-      die "could not download $REPO_URL/archive/$REF.tar.gz — is \"$REF\" a branch, tag, or commit?"
+      die "could not download $ARCHIVE_URL — is \"$REF\" a branch, tag, or commit?"
     fi
     [ -f "$staging/packages/node/package.json" ] || { rm -rf "$staging"; die "downloaded tree has no packages/node/package.json"; }
     rm -rf "$CACHE_DIR/$REF.old"

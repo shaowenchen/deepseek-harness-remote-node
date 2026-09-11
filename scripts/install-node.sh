@@ -13,6 +13,10 @@
 #
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
+#   --proxy URL        Mirror to fetch GitHub through, PREPENDED to the URL:
+#                      --proxy https://ghproxy.example fetches
+#                      https://ghproxy.example/https://github.com/... (also
+#                      read from $DSH_PROXY)
 #   --bin-dir DIR      Where to put the `dsh-node` command
 #                      (default: /usr/local/bin when writable, else ~/.local/bin)
 #   --dry-run          Print what would happen, change nothing
@@ -26,12 +30,14 @@ CACHE_DIR="${DSH_NODE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/deepseek-harness-re
 REF="master"
 SOURCE_DIR=""
 BIN_DIR=""
+PROXY="${DSH_PROXY:-}"
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref) REF="$2"; shift 2 ;;
     --source) SOURCE_DIR="$2"; shift 2 ;;
+    --proxy) PROXY="$2"; shift 2 ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
@@ -66,6 +72,29 @@ if [ -z "$BIN_DIR" ]; then
 fi
 WRAPPER="$BIN_DIR/dsh-node"
 
+# ── the GitHub mirror ────────────────────────────────────────────────────────
+# `--proxy URL` (or $DSH_PROXY) names a mirror that fetches GitHub for a network
+# that cannot reach it: github.com and raw.githubusercontent.com are both
+# unreliable from mainland China, and this installer runs ON the node, whose
+# network is not the one the operator tested from.
+#
+# The mirror's contract is PREPEND, not "an alternative host": the whole
+# original URL stays intact behind the prefix, and the authority is split off
+# first because the result is parsed as one URL, so a colon or a doubled slash
+# there is a malformed one rather than a path the mirror can strip again.
+#
+#   source: https://github.com/o/r                        (scheme + authority)
+#   rest:   /shaowenchen/deepseek-harness-remote-node     (path)
+#   out:    https://mirror/https://github.com/o/r         -- one slash joined
+gh_url() {
+  [ -n "$PROXY" ] || { printf '%s' "$1"; return; }
+  _scheme=${1%%://*}
+  _rest=${1#*://}
+  _authority=${_rest%%/*}
+  _path=${_rest#"$_authority"}
+  printf '%s/%s://%s%s' "${PROXY%/}" "$_scheme" "$_authority" "$_path"
+}
+
 # ── 1. Resolve the source ────────────────────────────────────────────────────
 if [ -n "$SOURCE_DIR" ]; then
   SRC_KIND="local checkout ($SOURCE_DIR)"
@@ -80,11 +109,18 @@ else
   PKG_DIR="$CACHE_DIR/$REF/packages/node"
   USE_LOCAL=0
 fi
+ARCHIVE_URL=$(gh_url "$REPO_URL/archive/$REF.tar.gz")
 
 say "dsh-node installer"
 say "  source:  $SRC_KIND"
 say "  package: $PKG_DIR"
 say "  command: $WRAPPER"
+# Printed whenever a mirror is in play, on every path — including the two that
+# download nothing. A proxy that is set but silently unused is the failure worth
+# designing out: the operator who passed it is on a network where the direct URL
+# does not work, so "it is being honoured" has to be visible rather than
+# inferred from which URL the error message happened to name.
+[ -z "$PROXY" ] || say "  proxy:   $PROXY"
 [ "$DRY_RUN" -eq 1 ] && say "  (dry run — nothing will be written)"
 say ""
 
@@ -94,7 +130,7 @@ if [ "$USE_LOCAL" -eq 1 ]; then
 else
   say "[1/5] downloading"
   if [ "$DRY_RUN" -eq 1 ]; then
-    say "  would: download $REPO_URL/archive/$REF.tar.gz"
+    say "  would: download $ARCHIVE_URL"
     say "  would: extract to $CACHE_DIR/$REF"
   else
     command -v curl >/dev/null 2>&1 || die "curl is required to download $REF"
@@ -111,9 +147,9 @@ else
     staging="$CACHE_DIR/.staging.$REF.$$"
     rm -rf "$staging"
     mkdir -p "$staging"
-    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$staging" --strip-components=1; then
+    if ! curl -fsSL "$ARCHIVE_URL" | tar -xz -C "$staging" --strip-components=1; then
       rm -rf "$staging"
-      die "could not download $REPO_URL/archive/$REF.tar.gz — is \"$REF\" a branch, tag, or commit?"
+      die "could not download $ARCHIVE_URL — is \"$REF\" a branch, tag, or commit?"
     fi
     [ -f "$staging/packages/node/package.json" ] || { rm -rf "$staging"; die "downloaded tree has no packages/node/package.json"; }
     rm -rf "$CACHE_DIR/$REF.old"
