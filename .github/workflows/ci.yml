@@ -78,3 +78,35 @@ jobs:
             }
           })
           "
+
+  # The installers build with `npm ci --include=dev`, and whether that flag is
+  # needed depends on NODE_ENV — which CI does not otherwise set. A build that
+  # works here and fails in a production container is the exact bug this job
+  # exists to catch, so it installs the way a deployment container does.
+  install-under-production-env:
+    name: install (NODE_ENV=production)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/node
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Mirrors what scripts/install-{host,node}.sh do, on a host configured
+      # like a deployment container.
+      - name: Install and build as a production host would
+        env:
+          NODE_ENV: production
+        run: |
+          npm ci --include=dev --no-audit --no-fund
+          npm run build
+
+      - name: Verify the build produced every entry point
+        run: |
+          for f in lib/index.js lib/fs-node.js lib/subprocess-node.js lib/agent-cli.js; do
+            test -f "$f" || { echo "missing $f"; exit 1; }
+          done

@@ -113,6 +113,10 @@ else
 fi
 
 # ── 3. Build ─────────────────────────────────────────────────────────────────
+# `--include=dev` is load-bearing: TypeScript is a devDependency and the build
+# needs it, but npm skips devDependencies when NODE_ENV is production — the
+# normal setting for a deployment container. Without the flag this step failed
+# with `tsc: not found` on exactly those hosts.
 say "[2/5] checking Node and building"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
@@ -122,9 +126,9 @@ else
   major=$(node -p 'process.versions.node.split(".")[0]')
   [ "$major" -ge 22 ] || die "Node $major found, but 22+ is required"
   if [ -f "$PKG_DIR/package-lock.json" ]; then
-    ( cd "$PKG_DIR" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
+    ( cd "$PKG_DIR" && npm ci --include=dev --no-audit --no-fund >/dev/null 2>&1 || npm install --include=dev --no-audit --no-fund >/dev/null )
   else
-    ( cd "$PKG_DIR" && npm install --no-audit --no-fund >/dev/null )
+    ( cd "$PKG_DIR" && npm install --include=dev --no-audit --no-fund >/dev/null )
   fi
   ( cd "$PKG_DIR" && npm run build >/dev/null )
   [ -f "$PKG_DIR/lib/agent-cli.js" ] || die "build produced no lib/agent-cli.js"

@@ -38,8 +38,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-timeout=15000 \"tests/*.spec.ts\"",
-    "prepare": "npm run build"
+    "test": "node --test --test-timeout=15000 \"tests/*.spec.ts\""
   },
   "keywords": [
     "dsh",

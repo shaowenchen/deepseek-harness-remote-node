@@ -144,15 +144,22 @@ fi
 #
 # One package carries all three entry points — the registry and both adapters —
 # so there is nothing to build in dependency order.
+#
+# `--include=dev` is load-bearing, not tidiness. TypeScript is a devDependency
+# and building needs it, but npm skips devDependencies whenever NODE_ENV is
+# production — which is exactly how a deployment container is configured. This
+# script ran without the flag and failed on those hosts with `tsc: not found`,
+# while passing everywhere NODE_ENV was unset. Asking for dev deps explicitly
+# makes the build independent of that variable.
 say "[2/5] installing dependencies and building"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
 else
   command -v npm >/dev/null 2>&1 || die "npm is required to build; install Node 22+ first"
   if [ -f "$PKG_DIR/package-lock.json" ]; then
-    ( cd "$PKG_DIR" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
+    ( cd "$PKG_DIR" && npm ci --include=dev --no-audit --no-fund >/dev/null 2>&1 || npm install --include=dev --no-audit --no-fund >/dev/null )
   else
-    ( cd "$PKG_DIR" && npm install --no-audit --no-fund >/dev/null )
+    ( cd "$PKG_DIR" && npm install --include=dev --no-audit --no-fund >/dev/null )
   fi
   ( cd "$PKG_DIR" && npm run build >/dev/null )
   [ -f "$PKG_DIR/lib/index.js" ] || die "build produced no lib/index.js"
