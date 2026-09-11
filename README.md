@@ -212,6 +212,15 @@ curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote
   | sh -s -- --bin-dir ~/.local/bin
 ```
 
+The only things it expects to find are a POSIX `sh`, `curl` and `tar` to fetch
+the source, and Node **22+** with `npm` to build it. Everything comes from
+`PATH`; `$SHELL` is consulted only as a *fallback* for the case where a login rc
+file is what put `node` on the path (nvm), so a host that leaves `SHELL` unset —
+a container, a Kubernetes pod — is fine. The build runs `npm install` and `tsc`
+in `$XDG_CACHE_HOME/deepseek-harness-remote-node/<ref>`, so it needs registry
+access and room for `node_modules` (a few hundred MB); nothing is installed
+outside that cache and `--bin-dir`.
+
 Then connect it. `wss://` here is the host's public address, not a local port:
 
 ```sh

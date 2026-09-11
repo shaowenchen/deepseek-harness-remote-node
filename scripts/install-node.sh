@@ -146,7 +146,7 @@ find_node() {
     return 0
   fi
   login_sh=""
-  for candidate in "$SHELL" zsh bash sh; do
+  for candidate in "${SHELL:-}" zsh bash sh; do
     [ -n "$candidate" ] || continue
     command -v "$candidate" >/dev/null 2>&1 || continue
     resolved=$(env -i HOME="$HOME" USER="${USER:-}" "$candidate" -lic \
