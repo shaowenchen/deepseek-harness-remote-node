@@ -105,14 +105,39 @@ Node **22+** required. Not on npm yet, so both sides install from GitHub.
 ### On the dsh host
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
-  | sh -s -- --cwd /srv/workspace
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh | sh
 ```
 
 That downloads the package, builds it, links it into the dsh profile, and writes
 the plugin config below into `$DSH_HOME/profiles/web/cordis.patch.yml`. It works
 inside the `deepseek-harness-web` container too, where no package manager exists.
 Skip to [On the node](#on-the-node) if you do not want to read the config.
+
+**The working directory is the one setting you must think about.** `--cwd` is a
+path **on the node** — in the node's namespace, not this machine's. It defaults
+to `$HOME/.deepseek-harness-remote-node` on the node, which is right for most
+setups; pass it when the work belongs somewhere else, such as a mounted volume:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
+  | sh -s -- --cwd /mnt/data/project
+```
+
+It must **already exist on the node**. A missing working directory is not a
+degraded mode — the first command fails outright with `ENOENT` — so create it
+there before connecting:
+
+```sh
+# on the node
+mkdir -p ~/.deepseek-harness-remote-node
+```
+
+Two notes on that default. The leading dot means `ls` and most file pickers hide
+it, which is intended for a directory the tool owns — `--cwd` takes any path if
+you would rather browse your work. And it is deliberately not `/srv/workspace`,
+which is common in examples but safe nowhere: `/srv` is a Linux convention that
+macOS lacks entirely, and on Linux it exists but is empty, so that path exists
+by default on no platform at all.
 
 <details>
 <summary>The config it writes</summary>
@@ -122,7 +147,7 @@ Skip to [On the node](#on-the-node) if you do not want to read the config.
     - id: node-registry
       name: '@shaowenchen/deepseek-harness-remote-node'
       config:
-        cwd: /srv/workspace        # working directory ON THE NODE
+        cwd: /home/you/.deepseek-harness-remote-node  # working directory ON THE NODE
         heartbeatIntervalMs: 2000  # ping cadence and pong deadline
         onDisconnect: orphan       # orphan | terminate node processes on a drop
     - id: fs-node
@@ -155,7 +180,7 @@ Run this **on the machine that becomes the execution world**, then connect it:
 curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
   | sh -s -- --bin-dir ~/.local/bin
 
-dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace
+dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd ~/.deepseek-harness-remote-node
 ```
 
 It logs `registered as <nodeId> (generation 1, cwd ...)` when connected, and

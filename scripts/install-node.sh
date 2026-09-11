@@ -90,9 +90,9 @@ say ""
 
 # ── 2. Fetch ─────────────────────────────────────────────────────────────────
 if [ "$USE_LOCAL" -eq 1 ]; then
-  say "[1/4] using the local checkout — skipping download"
+  say "[1/5] using the local checkout — skipping download"
 else
-  say "[1/4] downloading"
+  say "[1/5] downloading"
   if [ "$DRY_RUN" -eq 1 ]; then
     say "  would: download $REPO_URL/archive/$REF.tar.gz"
     say "  would: extract to $CACHE_DIR/$REF"
@@ -113,7 +113,7 @@ else
 fi
 
 # ── 3. Build ─────────────────────────────────────────────────────────────────
-say "[2/4] checking Node and building"
+say "[2/5] checking Node and building"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
 else
@@ -135,7 +135,7 @@ say "      ok"
 # A tiny wrapper rather than a symlink: it pins the interpreter and the built
 # entry point, so the command keeps working no matter how the checkout was laid
 # out or whether the exec bit survived the unpack.
-say "[3/4] installing the dsh-node command"
+say "[3/5] installing the dsh-node command"
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: write $WRAPPER"
 else
@@ -149,7 +149,26 @@ else
 fi
 say "      ok"
 
-say "[4/4] done"
+# ── 5. Create the default working directory ──────────────────────────────────
+# This machine is the one the directory has to exist ON, so it is created here
+# rather than left as advice. A missing working directory is not a degraded
+# mode: `spawn` fails outright with ENOENT, so the execution world would be
+# broken rather than merely empty — and the user would find out from the first
+# command the agent tried to run.
+#
+# Only the DEFAULT is created. A caller who passes --cwd has named a directory
+# they own, and creating it for them would be guessing about their intent.
+say "[4/5] creating the default working directory"
+if [ -d "$HOME/.deepseek-harness-remote-node" ]; then
+  say "      already exists — left untouched"
+elif [ "$DRY_RUN" -eq 1 ]; then
+  say "  would: mkdir -p \$HOME/.deepseek-harness-remote-node"
+else
+  mkdir -p "$HOME/.deepseek-harness-remote-node"
+  say "      ok"
+fi
+
+say "[5/5] done"
 say ""
 if "$WRAPPER" --describe >/dev/null 2>&1 || [ "$DRY_RUN" -eq 1 ]; then
   say "Verify with:"
@@ -168,7 +187,14 @@ case ":$PATH:" in
 esac
 say "Connect this machine to a host with:"
 say ""
-say "    dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd /srv/workspace"
+say "    dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd \$HOME/.deepseek-harness-remote-node"
+say ""
+say "  \$HOME/.deepseek-harness-remote-node was created by this installer and is"
+say "  what the host defaults to. The working directory must EXIST: a missing one"
+say "  is not a degraded mode — the first command fails with ENOENT. Point --cwd"
+say "  at a directory you already have instead if you prefer:"
+say ""
+say "    dsh-node --url ... --cwd /mnt/data/project"
 say ""
 say "  Note: the node channel does not verify credentials yet. The credential is"
 say "  sent by the agent but never checked by the registry, so do not expose"

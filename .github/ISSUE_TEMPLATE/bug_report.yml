@@ -28,7 +28,7 @@ body:
       placeholder: |
         cd packages/node
         npm ci && npm run build
-        dsh-node --url wss://host/node/v1 --credential test --cwd /srv/workspace
+        dsh-node --url wss://host/node/v1 --credential test --cwd ~/.deepseek-harness-remote-node
     validations:
       required: true
 

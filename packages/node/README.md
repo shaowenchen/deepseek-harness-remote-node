@@ -46,7 +46,7 @@ deployments where no package manager is available.
     - id: node-registry
       name: '@shaowenchen/deepseek-harness-remote-node'
       config:
-        cwd: /srv/workspace
+        cwd: /home/you/.deepseek-harness-remote-node
         heartbeatIntervalMs: 2000
         onDisconnect: orphan
     - id: fs-node
@@ -69,7 +69,7 @@ deployments where no package manager is available.
 On the remote machine:
 
 ```sh
-dsh-node --url wss://your-host/node/v1 --credential <token> --cwd /srv/workspace
+dsh-node --url wss://your-host/node/v1 --credential <token> --cwd ~/.deepseek-harness-remote-node
 ```
 
 The agent logs `registered as <nodeId> (generation 1, cwd ...)` once the

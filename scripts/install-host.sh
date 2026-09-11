@@ -9,7 +9,7 @@
 #   ./install-host.sh [options]
 #
 #   --cwd DIR          Execution world working directory on the node
-#                      (default: /srv/workspace)
+#                      (default: $HOME/.deepseek-harness-remote-node)
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
 #   --dsh-home DIR     dsh home (default: $DSH_HOME, else ~/.dsh)
@@ -21,6 +21,21 @@
 # from a git URL. Downloading the release tarball and linking it is therefore the
 # honest install path — and it is also the one that works inside the
 # deepseek-harness-web container, which ships Node but no package manager.
+#
+# Why the workspace default is $HOME/.deepseek-harness-remote-node rather than
+# /srv/workspace or $HOME/workspace:
+#
+# /srv is a Linux convention and is not universal — macOS has no /srv at all,
+# and on Linux it exists but is empty, so /srv/workspace exists nowhere by
+# default. $HOME/workspace is portable but collides with a name people commonly
+# already use for their own work, and this directory is ours to own.
+#
+# The node installer creates the directory, because a missing working directory
+# is not a degraded mode: `spawn` fails outright with ENOENT, so the execution
+# world would be broken rather than merely empty. Note that the leading dot
+# hides it from `ls` and from most file pickers — that is intended for a
+# directory the tool manages, and `--cwd` takes any path if you would rather
+# browse it.
 set -eu
 
 REPO_URL="https://github.com/shaowenchen/deepseek-harness-remote-node"
@@ -79,15 +94,15 @@ die() { echo "install-host: $*" >&2; exit 1; }
 if [ -n "$SOURCE_DIR" ]; then
   SRC_KIND="local checkout ($SOURCE_DIR)"
   PKG_DIR="$SOURCE_DIR/packages/node"
-  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=/srv/workspace
+  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=${HOME:-/root}/.deepseek-harness-remote-node
 elif [ -f "$CLONE_ROOT/packages/node/package.json" ]; then
   SRC_KIND="local checkout ($CLONE_ROOT)"
   PKG_DIR="$CLONE_ROOT/packages/node"
-  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=/srv/workspace
+  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=${HOME:-/root}/.deepseek-harness-remote-node
 else
   SRC_KIND="$REPO_URL @ $REF"
   PKG_DIR="$CACHE_DIR/$REF/packages/node"
-  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=/srv/workspace
+  [ -n "$WORKSPACE_CWD" ] || WORKSPACE_CWD=${HOME:-/root}/.deepseek-harness-remote-node
 fi
 
 say "deepseek-harness-remote-node installer"
