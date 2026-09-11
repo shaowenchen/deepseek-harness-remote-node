@@ -154,6 +154,19 @@ export class NodeRegistry extends Service {
   /** Per-stream plumbing, keyed by stream id. Lives for that stream only. */
   private readonly streams = new Map<number, StreamPlumbing>()
 
+  /**
+   * Report one lifecycle fact on stderr.
+   *
+   * Deliberately not `ctx.logger`: that service buffers into an in-memory ring
+   * with no console exporter in the shipped profiles, so a message sent there
+   * is stored and never shown. An operator watching a host needs these on the
+   * terminal or in the service journal, which is stderr.
+   * @param message - the line to report.
+   */
+  private note(message: string): void {
+    process.stderr.write(`${message}\n`)
+  }
+
   constructor(ctx: Context, config: Config) {
     super(ctx, 'nodeRegistry')
     this.path = config.path ?? NODE_CHANNEL_PATH
@@ -323,6 +336,21 @@ export class NodeRegistry extends Service {
           this.socket = socket
           registered = true
           this.startHeartbeat(socket)
+          // Announced here as well as in the agent's own log, because this is
+          // the host side of the answer to "which machine is my execution
+          // world?" — and the agent's log lives on a machine the operator may
+          // not be looking at.
+          //
+          // Written to stderr rather than `ctx.logger`: that service is a ring
+          // buffer with no console sink in the shipped profiles, so an
+          // `info()` there is captured for inspection and printed nowhere —
+          // it reads as logging while being invisible in a terminal or a
+          // service journal. stderr is where this process's own diagnostics
+          // already go.
+          this.note(
+            `dsh-node: ${frame.nodeId} registered (generation ${this.generation}, `
+            + `${frame.platform}/${frame.arch}, ${frame.capabilities.length} operations, cwd ${this.cwd})`,
+          )
           socket.send(encodeControl({
             type: 'ready',
             generation: this.generation,
@@ -385,6 +413,9 @@ export class NodeRegistry extends Service {
 
   /** @internal Send a refusal, then close. */
   private refuse(socket: WebSocket, code: NodeRefusalCode, message: string): void {
+    // A refusal is invisible from the node's side once it reconnects and starts
+    // retrying, so the reason is recorded here — this is the host that decided.
+    this.note(`dsh-node: refused a connection [${code}]: ${message}`)
     socket.send(encodeControl({ type: 'refused', code, message }))
     socket.close(1008, code)
   }
@@ -428,6 +459,7 @@ export class NodeRegistry extends Service {
    */
   private forget(registered: boolean): void {
     const generation = this.generation
+    const nodeId = this.descriptor?.nodeId
     this.socket = undefined
     this.descriptor = undefined
     this.stopHeartbeat()
@@ -437,8 +469,19 @@ export class NodeRegistry extends Service {
         `node disconnected (generation ${generation})`,
       ))
     }
+    const failed = this.streams.size
     this.streams.clear()
-    if (registered) this.ctx.emit('node/disconnected', generation, this.onDisconnect)
+    if (registered) {
+      // Logged with the count of streams this drop failed, because that number
+      // is the difference between "a node went away quietly" and "work was in
+      // flight and just got rejected" — and the execution world is now EMPTY,
+      // which every later operation will report as `node is not connected`.
+      this.note(
+        `dsh-node: ${nodeId ?? 'node'} disconnected (generation ${generation}, `
+        + `${failed} stream${failed === 1 ? '' : 's'} failed; execution world is now empty)`,
+      )
+      this.ctx.emit('node/disconnected', generation, this.onDisconnect)
+    }
   }
 }
 

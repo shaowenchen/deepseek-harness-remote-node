@@ -171,9 +171,17 @@ describe('connection diagnostics: a failure says what went wrong', () => {
     //
     // A real child process is the only way to observe this: in-process, the
     // test runner's own handles keep the loop alive and the unref is invisible.
+    // The TS entry point, not the built `lib/agent-cli.js`: CI runs the tests
+    // BEFORE `npm run build`, so `lib/` does not exist yet and spawning into it
+    // failed with MODULE_NOT_FOUND — a green test locally and a red one in CI.
+    // Node executes the `.ts` source directly, so this has no such ordering
+    // dependency and no build step to remember.
     const child = spawn(
       process.execPath,
-      [join(import.meta.dirname, '..', 'lib', 'agent-cli.js'), '--url', 'ws://127.0.0.1:1/node/v1', '--credential', 'x'],
+      [
+        join(import.meta.dirname, '..', 'src', 'agent-cli.ts'),
+        '--url', 'ws://127.0.0.1:1/node/v1', '--credential', 'x',
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     )
     const output: string[] = []
