@@ -128,14 +128,32 @@ if [ -z "$SOURCE_DIR" ] && [ ! -f "$CLONE_ROOT/packages/node/package.json" ]; th
     command -v curl >/dev/null 2>&1 || die "curl is required to download $REF"
     command -v tar  >/dev/null 2>&1 || die "tar is required to unpack $REF"
     mkdir -p "$CACHE_DIR"
-    # Replace wholesale rather than merging: a stale file from a previous ref
-    # surviving into the new tree is exactly the kind of silent drift this
-    # installer exists to avoid.
-    rm -rf "$CACHE_DIR/$REF"
-    mkdir -p "$CACHE_DIR/$REF"
-    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$CACHE_DIR/$REF" --strip-components=1; then
+    # Build the new tree BESIDE the old one and swap it in, never replacing the
+    # old tree in place.
+    #
+    # Replacing wholesale is still the rule — a stale file surviving from a
+    # previous ref is exactly the silent drift this installer exists to avoid.
+    # But `rm -rf` of a directory a RUNNING dsh has open is not a safe way to do
+    # it: the symlink into the profile points here, and when a recursive watcher
+    # (this profile reloads patches live) rescans it mid-download, the missing
+    # path arrives as an unhandled `ENOENT: scandir .../node_modules/zod` that
+    # takes the host process down. The window is real and this has happened.
+    #
+    # A rename is atomic, so any watcher sees the old tree or the new one and
+    # never a hole between them. Downloading into a scratch dir first also means
+    # a failed fetch leaves the working install untouched.
+    staging="$CACHE_DIR/.staging.$REF.$$"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$staging" --strip-components=1; then
+      rm -rf "$staging"
       die "could not download $REPO_URL/archive/$REF.tar.gz — is \"$REF\" a branch, tag, or commit?"
     fi
+    [ -f "$staging/packages/node/package.json" ] || { rm -rf "$staging"; die "downloaded tree has no packages/node/package.json"; }
+    rm -rf "$CACHE_DIR/$REF.old"
+    if [ -e "$CACHE_DIR/$REF" ]; then mv "$CACHE_DIR/$REF" "$CACHE_DIR/$REF.old"; fi
+    mv "$staging" "$CACHE_DIR/$REF"
+    rm -rf "$CACHE_DIR/$REF.old"
     [ -f "$PKG_DIR/package.json" ] || die "downloaded tree has no packages/node/package.json"
   fi
   say "      ok"
@@ -246,24 +264,41 @@ if [ "$DRY_RUN" -eq 1 ]; then
 elif grep -q 'node-registry' "$PATCH_FILE" 2>/dev/null; then
   # The registry row exists — but it may predate credential verification, in
   # which case there is no `credential:` line in it and the channel is open.
-  # Config overrides target an entry by id and merge, so a `- id: node-registry`
-  # block carrying only the credential is a legal patch that adds the field
-  # without touching the rest. Backfilling here is what upgrades an existing
-  # install instead of leaving it silently unauthenticated.
+  #
+  # The field is added IN PLACE, as a sibling of the entry's existing `cwd`.
+  # That is not a stylistic choice. A separate `- id: node-registry` override
+  # REPLACES the entry's config rather than merging into it, so appending one
+  # drops `cwd` — and `cwd` is required, so dsh then refuses to boot with
+  # `$.cwd missing required value`. Appending looked tidier and put the host in
+  # a crash loop; the sed below is what actually works.
   if grep -A20 'id: node-registry' "$PATCH_FILE" 2>/dev/null | grep -q 'credential:'; then
     say "      node registry already registered, with a credential — left untouched"
   elif [ "$DRY_RUN" -eq 1 ]; then
     say "  would: backfill credential into the existing node-registry entry"
   else
-    {
-      printf '\n# Credential verification, added to the node-registry entry above.\n'
-      printf '# Config overrides merge by id, so this adds the field without\n'
-      printf '# restating the entry — which is what makes it safe to append.\n'
-      printf -- '- id: node-registry\n'
-      printf -- '  config:\n'
-      printf -- '    credential: %s\n' "$CREDENTIAL"
-    } >> "$PATCH_FILE"
-    say "      node registry already registered — credential backfilled"
+    tmp="$PATCH_FILE.tmp.$$"
+    # Match the cwd line of the node-registry entry specifically: `want` turns
+    # on at that id and off at any other, so a cwd belonging to a different
+    # entry is never the insertion point.
+    if awk -v CRED="$CREDENTIAL" '
+          /^[[:space:]]*- id: node-registry[[:space:]]*$/ { want = 1 }
+          want && !done && /^[[:space:]]+cwd:/ {
+            print
+            match($0, /^[[:space:]]+/)
+            printf "%scredential: %s\n", substr($0, 1, RLENGTH), CRED
+            done = 1; next
+          }
+          want && /^[[:space:]]*- id: / && !/node-registry/ { want = 0 }
+          { print }
+        ' "$PATCH_FILE" > "$tmp" && [ -s "$tmp" ]; then
+      mv "$tmp" "$PATCH_FILE"
+      say "      node registry already registered — credential backfilled"
+    else
+      rm -f "$tmp"
+      say "  !! could not backfill $PATCH_FILE — add the credential by hand:"
+      say "       under the node-registry entry's cwd line, add:"
+      say "         credential: $CREDENTIAL"
+    fi
   fi
 else
   mkdir -p "$PROFILE_DIR"

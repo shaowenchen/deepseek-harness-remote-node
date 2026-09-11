@@ -100,13 +100,26 @@ else
     command -v curl >/dev/null 2>&1 || die "curl is required to download $REF"
     command -v tar  >/dev/null 2>&1 || die "tar is required to unpack $REF"
     mkdir -p "$CACHE_DIR"
-    # Replace wholesale rather than merging: a stale file surviving from a
-    # previous ref is exactly the silent drift this installer exists to avoid.
-    rm -rf "$CACHE_DIR/$REF"
-    mkdir -p "$CACHE_DIR/$REF"
-    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$CACHE_DIR/$REF" --strip-components=1; then
+    # Build the new tree BESIDE the old one and swap it in, never replacing it
+    # in place. Replacing wholesale is still the rule — a stale file surviving
+    # from a previous ref is the silent drift this installer exists to avoid —
+    # but `rm -rf` removes the directory a RUNNING process may have open, and a
+    # recursive watcher rescanning it arrives as an unhandled ENOENT that takes
+    # that process down. A rename is atomic: watchers see the old tree or the
+    # new one, never a hole. It also means a failed fetch leaves a working
+    # install untouched.
+    staging="$CACHE_DIR/.staging.$REF.$$"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+    if ! curl -fsSL "$REPO_URL/archive/$REF.tar.gz" | tar -xz -C "$staging" --strip-components=1; then
+      rm -rf "$staging"
       die "could not download $REPO_URL/archive/$REF.tar.gz — is \"$REF\" a branch, tag, or commit?"
     fi
+    [ -f "$staging/packages/node/package.json" ] || { rm -rf "$staging"; die "downloaded tree has no packages/node/package.json"; }
+    rm -rf "$CACHE_DIR/$REF.old"
+    if [ -e "$CACHE_DIR/$REF" ]; then mv "$CACHE_DIR/$REF" "$CACHE_DIR/$REF.old"; fi
+    mv "$staging" "$CACHE_DIR/$REF"
+    rm -rf "$CACHE_DIR/$REF.old"
     [ -f "$PKG_DIR/package.json" ] || die "downloaded tree has no packages/node/package.json"
   fi
   say "      ok"
