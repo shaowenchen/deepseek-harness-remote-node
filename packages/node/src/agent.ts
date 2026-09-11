@@ -753,8 +753,13 @@ export class NodeAgent {
         ? `disconnected; reconnecting in ${Math.round(delay)}ms`
         : `cannot connect: ${failure}; reconnecting in ${Math.round(delay)}ms`,
     )
+    // Deliberately NOT `unref()`d. Unref'ing looks tidy — a pending reconnect
+    // should not by itself hold the process open — but between attempts there
+    // is nothing else to hold it open: the socket that was keeping the event
+    // loop alive is gone. Node then finds an empty loop and exits silently,
+    // mid-reconnect, exactly when the agent is most needed. `stop()` clears
+    // this timer, which is what actually ends the process on request.
     this.retry = setTimeout(() => { this.connect() }, delay)
-    this.retry?.unref?.()
   }
 }
 

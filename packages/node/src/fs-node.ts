@@ -128,13 +128,26 @@ export class NodeFileSystem extends FileSystem {
   })
 
   /**
-   * The node registry, resolved lazily on first use.
+   * The registry is a hard dependency, so it is declared rather than merely
+   * reached for.
    *
-   * Injection is asynchronous (cordis may mount the channel after this plugin),
-   * so the service is read through the context on demand rather than captured in
-   * the constructor. That also means a composition which never mounts the
-   * registry fails on the first file operation with a clear message instead of
-   * binding `undefined` at load.
+   * cordis guards every service read: touching a property that is not in the
+   * context's own store and not in its `inject` set throws `cannot get property
+   * "nodeRegistry" without inject` — before any operation runs, and with a
+   * message that describes the mechanism rather than the problem. Declaring it
+   * is also what makes the ordering work: cordis parks this plugin until the
+   * registry appears, so the two can be loaded in either order.
+   */
+  static inject = ['nodeRegistry']
+
+  /**
+   * The node registry.
+   *
+   * Read through the context rather than captured in the constructor: the
+   * declaration above guarantees it is present by the time anything here runs,
+   * and going through `this.ctx` keeps the read on the current fiber. The
+   * undefined branch is unreachable in a correct composition and exists only so
+   * a mis-built one fails with a sentence instead of a property access error.
    */
   private get registry(): NodeRegistry {
     const registry = (this.ctx as Context & { nodeRegistry?: NodeRegistry }).nodeRegistry

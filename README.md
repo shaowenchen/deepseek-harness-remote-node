@@ -158,11 +158,15 @@ by default on no platform at all.
 # Exactly one execution world may exist. Leaving the host's own providers
 # mounted beside the node's is a composition error, not a fallback — and
 # whichever wins silently decides where the agent's work happens.
+#
+# The ids to disable are the ones THIS profile actually mounts. `fs-sandbox`
+# (which wraps fs-local) and `subprocess` are the ids in the shipped web and
+# headless profiles; `fs-local` / `subprocess-local` exist as packages but are
+# not the ids there, so naming them disables nothing. Check with:
+#   dsh --profile <name> --dump-config | grep -E 'id: (fs|subprocess)'
 - id: fs-sandbox
   disabled: true
-- id: fs-local
-  disabled: true
-- id: subprocess-local
+- id: subprocess
   disabled: true
 ```
 

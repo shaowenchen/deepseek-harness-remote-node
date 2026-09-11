@@ -16,6 +16,8 @@
 import { strict as assert } from 'node:assert'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { createServer, type Server } from 'node:http'
+import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 import type { Socket } from 'node:net'
 import { NodeAgent } from '../src/agent.ts'
 
@@ -157,6 +159,45 @@ describe('connection diagnostics: a failure says what went wrong', () => {
       )
     } finally {
       agent.stop()
+    }
+  })
+
+  it('keeps the event loop alive between attempts, so a reconnect actually happens', async () => {
+    // The failure this pins is silent: the reconnect timer was `unref()`d, and
+    // between attempts the socket that was holding the event loop open is gone
+    // — so Node found an empty loop and exited mid-reconnect. The log said
+    // "reconnecting in Nms" and then the process was simply not there any more,
+    // which reads as a crash with no error rather than as an unref.
+    //
+    // A real child process is the only way to observe this: in-process, the
+    // test runner's own handles keep the loop alive and the unref is invisible.
+    const child = spawn(
+      process.execPath,
+      [join(import.meta.dirname, '..', 'lib', 'agent-cli.js'), '--url', 'ws://127.0.0.1:1/node/v1', '--credential', 'x'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    const output: string[] = []
+    child.stdout.on('data', (b: Buffer) => output.push(b.toString()))
+    child.stderr.on('data', (b: Buffer) => output.push(b.toString()))
+
+    let exited: number | null | undefined
+    child.on('exit', (code) => { exited = code })
+
+    try {
+      // Long enough to cover several reconnect windows (the floor is ~250ms).
+      const deadline = Date.now() + 4000
+      while (Date.now() < deadline && exited === undefined) {
+        await new Promise((resolve) => { setTimeout(resolve, 50) })
+      }
+      assert.equal(
+        exited,
+        undefined,
+        `the agent exited on its own instead of continuing to reconnect (code ${exited}).\nGot:\n${output.join('')}`,
+      )
+      const attempts = output.join('').match(/connecting to/g)?.length ?? 0
+      assert.ok(attempts >= 2, `expected repeated attempts, saw ${attempts}.\nGot:\n${output.join('')}`)
+    } finally {
+      child.kill('SIGKILL')
     }
   })
 })
