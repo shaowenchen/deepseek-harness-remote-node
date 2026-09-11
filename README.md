@@ -112,15 +112,15 @@ Any mirror that prepends works. The mirror's URL goes in front of the GitHub URL
 with the scheme and host kept intact:
 
 ```
---proxy https://ghproxy.example
-  → https://ghproxy.example/https://github.com/…/archive/master.tar.gz
+--proxy https://ghproxy.chenshaowen.com
+  → https://ghproxy.chenshaowen.com/https://github.com/…/archive/master.tar.gz
 ```
 
 For the node, that is the whole install:
 
 ```sh
-curl -fsSL https://ghproxy.example/https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
-  | sh -s -- --proxy https://ghproxy.example
+curl -fsSL https://ghproxy.chenshaowen.com/https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
+  | sh -s -- --proxy https://ghproxy.chenshaowen.com
 ```
 
 **Both halves are needed.** The `curl` prefix has to be written out by hand — the
@@ -133,12 +133,12 @@ is nothing to stall, because the script never arrived.
 the flag is not needed on every run:
 
 ```sh
-DSH_PROXY=https://ghproxy.example ./install-host.sh
+DSH_PROXY=https://ghproxy.chenshaowen.com ./install-host.sh
 ```
 
-`ghproxy.example` is a placeholder — substitute whichever mirror you have.
-`https://ghproxy.chenshaowen.com` is one that works this way. With no proxy set,
-every URL is exactly what it was before.
+`ghproxy.chenshaowen.com` is the mirror used above; any mirror with the same
+prepend shape works in its place. With no proxy set, every URL is exactly what it
+was before.
 
 ### On the dsh host
 

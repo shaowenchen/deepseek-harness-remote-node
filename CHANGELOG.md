@@ -14,8 +14,8 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   names a mirror, and the whole GitHub URL is PREPENDED to it with the scheme
   and host intact:
 
-      --proxy https://ghproxy.example
-        → https://ghproxy.example/https://github.com/…/archive/master.tar.gz
+      --proxy https://ghproxy.chenshaowen.com
+        → https://ghproxy.chenshaowen.com/https://github.com/…/archive/master.tar.gz
 
   The naive concatenation is `$PROXY/$URL`, and the authority is split off
   before joining rather than left in place: the result is parsed as a single

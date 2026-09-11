@@ -14,9 +14,9 @@
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
 #   --proxy URL        Mirror to fetch GitHub through, PREPENDED to the URL:
-#                      --proxy https://ghproxy.example fetches
-#                      https://ghproxy.example/https://github.com/... (also
-#                      read from $DSH_PROXY)
+#                      --proxy https://ghproxy.chenshaowen.com fetches
+#                      https://ghproxy.chenshaowen.com/https://github.com/...
+#                      (also read from $DSH_PROXY)
 #   --bin-dir DIR      Where to put the `dsh-node` command
 #                      (default: /usr/local/bin when writable, else ~/.local/bin)
 #   --dry-run          Print what would happen, change nothing
@@ -41,7 +41,7 @@ while [ $# -gt 0 ]; do
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     *) echo "install-node: unknown argument: $1" >&2; exit 2 ;;
   esac

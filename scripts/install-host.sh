@@ -19,9 +19,9 @@
 #   --ref REF          Branch, tag, or commit to install (default: master)
 #   --source DIR       Use a local checkout instead of downloading
 #   --proxy URL        Mirror to fetch GitHub through, PREPENDED to the URL:
-#                      --proxy https://ghproxy.example fetches
-#                      https://ghproxy.example/https://github.com/... (also
-#                      read from $DSH_PROXY)
+#                      --proxy https://ghproxy.chenshaowen.com fetches
+#                      https://ghproxy.chenshaowen.com/https://github.com/...
+#                      (also read from $DSH_PROXY)
 #   --dsh-home DIR     dsh home (default: $DSH_HOME, else ~/.dsh)
 #   --dry-run          Print what would happen, change nothing
 #   -h, --help         Show this help
