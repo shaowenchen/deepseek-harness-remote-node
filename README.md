@@ -102,14 +102,14 @@ each other, so a second connection is refused with `busy` rather than merged.
 
 Node **22+** required. Not on npm yet, so both sides install from GitHub.
 
-Every block below sets `PROXY`. Leave it empty when GitHub is reachable; if your
-network cannot reach it, set it to a mirror that prepends, e.g.
-`https://ghproxy.chenshaowen.com`.
+Every block below starts with an empty `PROXY`. **If `github.com` is unreachable
+from that machine — mainland China, typically — set it to a mirror that
+prepends**, e.g. `https://ghproxy.chenshaowen.com`; leave it empty otherwise.
 
 ### On the dsh host
 
 ```sh
-PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+PROXY=  # if github.com is unreachable, e.g. https://ghproxy.chenshaowen.com
 
 curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh" \
   | sh -s -- --proxy "$PROXY"
@@ -125,7 +125,7 @@ It defaults to `$HOME/.deepseek-harness-remote-node`, which is right for most
 setups; pass it when the work belongs somewhere else, such as a mounted volume:
 
 ```sh
-PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+PROXY=  # if github.com is unreachable, e.g. https://ghproxy.chenshaowen.com
 
 curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh" \
   | sh -s -- --cwd /data/.deepseek-harness-remote-node --proxy "$PROXY"
@@ -217,7 +217,7 @@ it says.
 Run this **on the machine that becomes the execution world**, then connect it:
 
 ```sh
-PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+PROXY=  # if github.com is unreachable, e.g. https://ghproxy.chenshaowen.com
 
 curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh" \
   | sh -s -- --bin-dir ~/.local/bin --proxy "$PROXY"
@@ -254,7 +254,7 @@ on every registration.
 ### Removing it
 
 ```sh
-PROXY=https://ghproxy.chenshaowen.com   # empty if github.com is reachable
+PROXY=  # if github.com is unreachable, e.g. https://ghproxy.chenshaowen.com
 
 # On the host — removes the plugin symlink and the config entries it added.
 curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/uninstall.sh" \
