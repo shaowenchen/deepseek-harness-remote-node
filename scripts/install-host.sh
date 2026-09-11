@@ -211,11 +211,60 @@ say "      ok"
 # operation is idempotent by construction, so a re-run repairs a half-finished
 # install instead of stopping and asking the operator to finish it by hand.
 say "[4/5] registering the node channel in the patch layer"
+
+# The credential is resolved HERE, before the branch below, because it is needed
+# on every path — including the one where the registry row already exists. It
+# used to sit inside the insert branch, so a host that had been registered by an
+# earlier version (before credentials existed) never got one: the run reported
+# success and the channel stayed open. Generating it unconditionally is what
+# lets the backfill below repair that state.
+#
+# Reused across runs so re-installing never silently invalidates a node that is
+# already connected; `--credential` overrides.
+CREDENTIAL_FILE="${DSH_NODE_CREDENTIAL_FILE:-$DSH_HOME/node-credential}"
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "  would: obtain a credential (--credential, $CREDENTIAL_FILE, or a new one)"
+elif [ -n "$CREDENTIAL" ]; then
+  say "      credential: supplied on the command line"
+elif [ -f "$CREDENTIAL_FILE" ]; then
+  CREDENTIAL=$(cat "$CREDENTIAL_FILE")
+  say "      credential: reusing $CREDENTIAL_FILE"
+elif command -v openssl >/dev/null 2>&1; then
+  CREDENTIAL=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+  mkdir -p "$DSH_HOME"
+  umask 077
+  printf '%s\n' "$CREDENTIAL" > "$CREDENTIAL_FILE"
+  chmod 600 "$CREDENTIAL_FILE"
+  say "      credential: generated, stored in $CREDENTIAL_FILE (0600)"
+else
+  die "no credential available: pass --credential, or install openssl so one can be generated"
+fi
+
 if [ "$DRY_RUN" -eq 1 ]; then
   say "  would: append the node-registry row to $PATCH_FILE if absent"
   say "  would: append the disable block for the host providers"
 elif grep -q 'node-registry' "$PATCH_FILE" 2>/dev/null; then
-  say "      node registry already registered — left untouched"
+  # The registry row exists — but it may predate credential verification, in
+  # which case there is no `credential:` line in it and the channel is open.
+  # Config overrides target an entry by id and merge, so a `- id: node-registry`
+  # block carrying only the credential is a legal patch that adds the field
+  # without touching the rest. Backfilling here is what upgrades an existing
+  # install instead of leaving it silently unauthenticated.
+  if grep -A20 'id: node-registry' "$PATCH_FILE" 2>/dev/null | grep -q 'credential:'; then
+    say "      node registry already registered, with a credential — left untouched"
+  elif [ "$DRY_RUN" -eq 1 ]; then
+    say "  would: backfill credential into the existing node-registry entry"
+  else
+    {
+      printf '\n# Credential verification, added to the node-registry entry above.\n'
+      printf '# Config overrides merge by id, so this adds the field without\n'
+      printf '# restating the entry — which is what makes it safe to append.\n'
+      printf -- '- id: node-registry\n'
+      printf -- '  config:\n'
+      printf -- '    credential: %s\n' "$CREDENTIAL"
+    } >> "$PATCH_FILE"
+    say "      node registry already registered — credential backfilled"
+  fi
 else
   mkdir -p "$PROFILE_DIR"
   [ -f "$PATCH_FILE" ] || printf '[]\n' > "$PATCH_FILE"
@@ -234,25 +283,6 @@ else
     grep '^#' "$PATCH_FILE" > "$seed_tmp" 2>/dev/null || true
     mv "$seed_tmp" "$PATCH_FILE"
   fi
-  # A credential is generated once and reused on later runs, so re-installing
-  # never silently invalidates a node that is already connected. Skipped when
-  # the operator supplied one with --credential.
-  CREDENTIAL_FILE="${DSH_NODE_CREDENTIAL_FILE:-$DSH_HOME/node-credential}"
-  if [ -n "$CREDENTIAL" ]; then
-    say "      credential: supplied on the command line"
-  elif [ -f "$CREDENTIAL_FILE" ]; then
-    CREDENTIAL=$(cat "$CREDENTIAL_FILE")
-    say "      credential: reusing $CREDENTIAL_FILE"
-  elif command -v openssl >/dev/null 2>&1; then
-    CREDENTIAL=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
-    umask 077
-    printf '%s\n' "$CREDENTIAL" > "$CREDENTIAL_FILE"
-    chmod 600 "$CREDENTIAL_FILE"
-    say "      credential: generated, stored in $CREDENTIAL_FILE (0600)"
-  else
-    die "no credential available: pass --credential, or install openssl so one can be generated"
-  fi
-
   {
     printf '\n# ── remote node execution world (added by scripts/install-host.sh) ──\n'
     printf -- '- insert:\n'
