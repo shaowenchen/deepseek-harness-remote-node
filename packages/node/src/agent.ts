@@ -130,8 +130,6 @@ interface OpOutcome {
   result: unknown
   /** Payload channel this stream's bytes travel on, for its whole lifetime. */
   payloadKind?: PayloadKind
-  /** Whether the caller may write to this process's stdin after the spawn. */
-  hasStdin?: boolean
 }
 
 /**
@@ -333,15 +331,17 @@ class World implements LiveHandles {
         return {
           result: {
             pid: handle.pid,
+            // Reported rather than assumed: this is what the node is ACTUALLY
+            // collecting, which is the fact the adapter needs before it builds
+            // readers. `piped` and the stdin flag are deliberately absent — the
+            // host derives both from the spec it sent, and echoing them back
+            // would be a second source of truth for the same thing.
             collected: {
               stdout: handle.collected.stdout !== undefined,
               stderr: handle.collected.stderr !== undefined,
             },
-            piped,
           },
-          /* A spawn always streams when it forwarded or collects anything. */
           payloadKind: piped.length > 0 ? piped[0] : undefined,
-          hasStdin: handle.stdin !== undefined,
         }
       }
 
