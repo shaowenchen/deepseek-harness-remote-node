@@ -120,11 +120,13 @@ happened.
 
 ## Security
 
-⚠️ **The node channel does not authenticate its peers yet.** The `credential`
-field is sent on the wire but is **not verified** by the registry, and the
-`auth` refusal code is not yet reachable — registration is gated only by protocol
-version and the single-slot rule. Do not expose `/node/v1` beyond a trusted
-network.
+⚠️ **The node channel authenticates only when a credential is configured.** Set
+`credential` in the registry config (what `scripts/install-host.sh` writes) or a
+`nodeCredential` reference resolved through `ctx.credentials`. **With neither
+set, the channel does not authenticate at all** — anything that can reach
+`/node/v1` becomes the execution world — and the host prints a warning on every
+registration saying so. Do not expose `/node/v1` beyond a trusted network in
+either case: the credential is a bearer token.
 
 The process adapter runs **arbitrary commands** on the node with the agent user's
 privileges, and `tty.*` opens interactive sessions with the same reach. There is

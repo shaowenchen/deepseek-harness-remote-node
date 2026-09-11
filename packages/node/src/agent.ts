@@ -16,6 +16,13 @@
  * 2. **It enforces its own sandbox.** Confinement is same-world only; a remote
  *    node replaces the capability rather than registering into `ctx.sandbox`.
  *    What this agent enforces is what the deployment gets.
+ *
+ * A third follows from those and is the reason the refusal path is not uniform:
+ * the channel it dials is single-slot, so two agent processes for one node id
+ * contend for it. A `busy` refusal is therefore retried rather than fatal —
+ * treating it as fatal turns a duplicate process (or a fast restart, which is
+ * the same race) into a dead node instead of a self-healing one. See
+ * {@link AgentOptions.busyRetryMs}.
  * @module @shaowenchen/deepseek-harness-remote-node-agent
  */
 
@@ -23,6 +30,7 @@ import { hostname, platform, arch, homedir } from 'node:os'
 import { mkdir, stat } from 'node:fs/promises'
 import { WebSocket } from 'ws'
 import {
+  DEFAULT_BUSY_RETRY_MS,
   NODE_PROTOCOL_VERSION,
   PAYLOAD_KIND,
   decodeControl,
@@ -32,6 +40,7 @@ import {
   type HostFrame,
   type NodeErrorCode,
   type NodeOperation,
+  type NodeRefusalCode,
   type PayloadKind,
 } from './protocol.ts'
 import {
@@ -72,6 +81,17 @@ export interface AgentOptions {
   /** Reconnect backoff ceiling in milliseconds. @default 10000 */
   reconnectMaxMs?: number
   /**
+   * How long to wait before retrying a connection the host refused as `busy`,
+   * in milliseconds.
+   *
+   * Retried at a fixed delay rather than through the exponential backoff,
+   * because `busy` is not congestion: it says the slot is occupied and will
+   * free on its own schedule, so the wait should be long enough to outlast
+   * that schedule and no longer. See {@link DEFAULT_BUSY_RETRY_MS}.
+   * @default 5000
+   */
+  busyRetryMs?: number
+  /**
    * What to do with locally owned processes when the channel drops.
    * `orphan` leaves them running; `terminate` reaps them.
    * @default 'orphan'
@@ -79,6 +99,25 @@ export interface AgentOptions {
   onDisconnect?: 'orphan' | 'terminate'
   /** Observation sink; the CLI wires this to stderr. */
   log?: (message: string) => void
+  /**
+   * Called when the host refuses this connection for a reason that retrying
+   * cannot fix — `protocol` or `auth` — immediately before the agent stops.
+   *
+   * Distinct from `log` because these two refusals are the ones an operator has
+   * to act on, and the exit status should say so: a supervisor set to
+   * `on-failure` has to be able to tell "my credential is wrong" (restarting
+   * will not help, a human must intervene) from "the process died" (restarting
+   * is exactly right). `busy` is deliberately NOT reported here — it is
+   * retried, not terminal.
+   *
+   * Invoked synchronously from the refusal handler. It exists so the caller can
+   * decide the exit status and then let the process end normally, flushing
+   * stderr, rather than calling `process.exit` mid-write and truncating the
+   * very message that explains the refusal.
+   * @param code - the refusal code, always `protocol` or `auth`.
+   * @param message - the host's own words for the refusal.
+   */
+  onTerminalRefusal?: (code: NodeRefusalCode, message: string) => void
 }
 
 /**
@@ -537,11 +576,19 @@ class World implements LiveHandles {
  * One agent connection, reconnecting until {@link NodeAgent.stop}.
  */
 export class NodeAgent {
-  private readonly opts: Required<Omit<AgentOptions, 'log'>> & Pick<AgentOptions, 'log'>
+  private readonly opts: Required<Omit<AgentOptions, 'log' | 'onTerminalRefusal'>>
+    & Pick<AgentOptions, 'log' | 'onTerminalRefusal'>
   private socket: WebSocket | undefined
   private stopping = false
   private attempt = 0
   private retry: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Settles {@link NodeAgent.run} when the agent stops for good.
+   *
+   * Set by `run()` and called by `stop()`, which is the single funnel every
+   * exit goes through — including the retry loop's own give-up paths.
+   */
+  private finish: (() => void) | undefined
   /**
    * The processes and terminals this agent owns.
    *
@@ -565,15 +612,16 @@ export class NodeAgent {
       agentVersion: options.agentVersion ?? '0.1.0',
       reconnectMinMs: options.reconnectMinMs ?? 500,
       reconnectMaxMs: options.reconnectMaxMs ?? 10_000,
+      busyRetryMs: options.busyRetryMs ?? DEFAULT_BUSY_RETRY_MS,
       onDisconnect: options.onDisconnect ?? 'orphan',
       url: options.url,
       credential: options.credential,
       cwd: options.cwd,
       log: options.log,
+      onTerminalRefusal: options.onTerminalRefusal,
     }
   }
 
-  /** Connect, and keep reconnecting until {@link stop}. */
   /**
    * Ensure the execution world's working directory exists, then connect.
    *
@@ -592,6 +640,24 @@ export class NodeAgent {
   start(): void {
     this.stopping = false
     void this.ensureWorkingDirectory().finally(() => { this.connect() })
+  }
+
+  /**
+   * Start, and resolve when the agent stops for good.
+   *
+   * The awaitable form of {@link start}, for a caller whose process lifetime is
+   * the agent's — the CLI. It replaces "start, then park on a promise that
+   * never settles": that idiom ends the process by exhausting the event loop,
+   * which makes the exit status whatever Node happens to pick rather than what
+   * happened. Awaiting the real lifetime lets the caller return a code that
+   * means something, and lets Node flush stderr on the way out instead of
+   * racing `process.exit` against the diagnostic.
+   * @returns a promise that resolves once the agent has stopped reconnecting.
+   */
+  run(): Promise<void> {
+    const settled = new Promise<void>((resolve) => { this.finish = resolve })
+    this.start()
+    return settled
   }
 
   /** @internal Create `opts.cwd` when it is absent. Never throws. */
@@ -616,6 +682,7 @@ export class NodeAgent {
     this.retry = undefined
     this.socket?.close(1000, 'agent stopping')
     this.socket = undefined
+    this.finish?.()
   }
 
   private log(message: string): void {
@@ -762,9 +829,40 @@ export class NodeAgent {
         return
 
       case 'refused':
-        // A refusal is terminal for this credential: reconnecting would only
-        // repeat it. Surface it and stop rather than hammering the host.
+        // Two kinds of refusal, and they want opposite responses.
+        //
+        // `busy` is the only code that describes a TEMPORAL condition: another
+        // connection holds the single slot, either a second agent process or
+        // the previous generation of this one, still in the host's hands
+        // because a peer that died without a FIN (a SIGKILLed process, a
+        // severed link) is not noticed until the heartbeat gives up on it.
+        // Both cases clear on their own, so this retries at a fixed delay
+        // longer than that reaping window — and does NOT go through the
+        // exponential backoff, which would stretch the wait out to the ceiling
+        // for a condition measured in seconds.
+        //
+        // Treating it as terminal is what makes the failure permanent.
+        // Something has to restart the process for the node to come back, and
+        // the thing most likely to be restarting it — a supervisor, or the
+        // operator's own second invocation — is also what created the
+        // duplicate. The two then hold each other down: the survivor is refused
+        // and exits, the supervisor starts another, and the log fills with
+        // alternating `registered` and `refused [busy]` lines while the node
+        // flaps. Retrying breaks the cycle by making the loser wait rather than
+        // die.
+        if (frame.code === 'busy') {
+          this.log(
+            `registration refused [busy]: waiting ${this.opts.busyRetryMs}ms for the `
+            + 'active connection to clear',
+          )
+          this.retry = setTimeout(() => { this.connect() }, this.opts.busyRetryMs)
+          return
+        }
+        // `protocol` and `auth` are terminal for this process as configured: the
+        // version will not change and the credential will not become valid by
+        // retrying. Surface the refusal and stop rather than hammering the host.
         this.log(`registration refused [${frame.code}]: ${frame.message}`)
+        this.opts.onTerminalRefusal?.(frame.code, frame.message)
         this.stop()
         return
 

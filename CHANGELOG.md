@@ -131,6 +131,38 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `busy` refusal killed the agent, turning a momentary race into a dead
+  node.** Registration is single-slot, so a second connection for one node id is
+  refused with `busy`. The agent treated every refusal as terminal — right for
+  `protocol` and `auth`, which retrying cannot fix, and wrong for `busy`, which
+  says only that the slot is still held. Two things hold it: another agent
+  process, or the previous connection of this one, which the host has not yet
+  reaped because the peer died without a clean close. The agent then exited, and
+  whatever restarted it created another contender: the loser was refused and
+  died, the supervisor started another, and the host's log filled with
+  alternating `registered` and `refused [busy]` lines while the node flapped.
+  Nothing in the loop could break it, because the thing restarting the agent was
+  also the thing producing the duplicate.
+
+  `busy` is now retried at a fixed delay (`--busy-retry`, default 5000ms) sized
+  to outlast the reaping window — one `heartbeatIntervalMs` to send the ping and
+  another to terminate an unresponsive peer — rather than through the
+  exponential backoff, which would stretch a seconds-long condition out to the
+  ceiling. The refused agent waits for the slot instead of dying, so a duplicate
+  or a fast restart costs a delay rather than the node.
+
+- **A refused registration exited 0, so `Restart=on-failure` could not tell it
+  apart from a clean stop.** The CLI documented `1` for "the host refused
+  registration" and could not produce it: the refusal path left nothing pending,
+  so the event loop drained and Node exited with the default status. The agent
+  now reports a terminal refusal through `onTerminalRefusal`, and the CLI awaits
+  the agent's real lifetime (`NodeAgent.run`) and returns `1`. Awaiting it
+  rather than parking on a promise that never settles also means stderr is
+  flushed by a normal exit instead of racing `process.exit` against the
+  diagnostic that explains the refusal.
+
+### Changed
+
 - **The adapters never declared the registry they depend on.** `fs-node` and
   `subprocess-node` read `ctx.nodeRegistry` through a type cast, but cordis
   guards every service read: an undeclared access throws

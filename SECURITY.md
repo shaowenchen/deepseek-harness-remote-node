@@ -32,7 +32,10 @@ The two properties the design deliberately enforces:
   remote.
 - **Single-slot registration.** Only one node may be registered at a time. A
   second connection is refused with `busy` rather than merged, because two
-  agents driving one machine would corrupt each other.
+  agents driving one machine would corrupt each other. The refusal is reported as
+  retryable, so an agent that loses the race waits for the slot rather than
+  exiting — the host cannot tell a duplicate process from a fast restart, and
+  neither can the agent.
 
 ## Known limitations — read before exposing the channel
 
@@ -67,7 +70,10 @@ What is still missing, and worth knowing before relying on this:
 - **No per-node identity.** Verification answers "is this the shared secret",
   not "which node is this". Two machines holding the same credential are
   indistinguishable, and the single-slot rule is what keeps them from both
-  connecting.
+  connecting. The same indistinguishability applies the other way: a machine
+  running two agent processes for one node id holds the slot with two claimants,
+  and they will swap it between them indefinitely. Run exactly one agent per
+  node id — one supervisor, and no second manual invocation beside it.
 
 **Even with a credential set, keep `/node/v1` off the public internet** —
 terminate at a reverse proxy and restrict the path by source address. The
@@ -123,6 +129,11 @@ machine, and the channel carries no rate limiting or lockout.
 - [ ] Set proxy read/write timeouts **well above** `heartbeatIntervalMs`
       (default 2s), or the proxy will sever healthy connections.
 - [ ] Rate-limit `/node/v1` separately.
+- [ ] Run **exactly one** agent process per node id, under one supervisor. A
+      second agent for the same id is refused as `busy` and now waits rather than
+      exiting, so a duplicate no longer kills the node — but it does mean two
+      processes swapping the slot, and neither of them is the one you meant to
+      be running.
 - [ ] Run the agent as an unprivileged user, confined to the blast radius you
       accept.
 - [ ] Treat the node's working directory as untrusted input from the host's

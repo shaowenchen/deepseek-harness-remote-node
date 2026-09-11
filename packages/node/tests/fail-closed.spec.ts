@@ -52,14 +52,14 @@ let world: string
 const sockets: Socket[] = []
 
 /** Register a fake webserver, then the registry, on a fresh context. */
-async function mount(cwd = '/srv/workspace'): Promise<void> {
+async function mount(cwd = '/srv/workspace', config: Record<string, unknown> = {}): Promise<void> {
   const fake = fakeWebServer()
   upgrades = fake.upgrades
   ctx = new Context()
   // A Cordis service must be *provided* to exist; assigning the property is
   // refused by design.
   ctx.provide('webServer', fake.service as never)
-  fiber = await ctx.plugin(NodeRegistry, { cwd })
+  fiber = await ctx.plugin(NodeRegistry, { cwd, ...config })
 }
 
 beforeEach(async () => {
@@ -542,6 +542,110 @@ describe('agent integration', () => {
       const outcome = await settled
       assert.ok(outcome instanceof NodeError, 'the caller must be told, not left waiting')
       assert.equal(outcome.code, 'disconnected')
+    } finally {
+      agent.stop()
+    }
+  })
+})
+
+/**
+ * A refusal is not one thing. `busy` describes a slot that is still held and
+ * will free itself; `protocol` and `auth` describe this process as configured
+ * and never will. Treating them alike is what turned a momentary race into a
+ * node that stayed down until a human noticed — and if a supervisor was
+ * restarting it, into one that never came back at all.
+ *
+ * These drive a real agent against a server that refuses on purpose, because
+ * the property is what the process DOES after the refusal: wait and dial again,
+ * or stop and say why.
+ */
+describe('a refusal is answered according to whether retrying can help', () => {
+  it('retries a busy refusal rather than exiting, and registers when the slot frees', async () => {
+    await mount(world, { credential: 'test-credential' })
+    const lines: string[] = []
+    // The registry holds the slot with a real incumbent, so every connection
+    // this agent makes is refused `busy` — exactly a duplicate's view of the
+    // world. What must NOT happen is the agent giving up.
+    const incumbent = await registerNode('contended')
+    assert.equal(incumbent.frame.type, 'ready')
+    const heldGeneration = incumbent.frame.generation as number
+
+    const agent = new NodeAgent({
+      url: `ws://127.0.0.1:${port}/node/v1`,
+      nodeId: 'contended',
+      credential: 'test-credential',
+      cwd: world,
+      reconnectMinMs: 100_000,
+      reconnectMaxMs: 100_000,
+      busyRetryMs: 50,
+      log: (message) => { lines.push(message) },
+    })
+    agent.start()
+    try {
+      // The refusal must be SURVIVED, not merely reported. Under the old
+      // behaviour the agent called `stop()` here and was gone.
+      await waitFor(
+        () => lines.some((l) => l.includes('refused [busy]')),
+        'the busy refusal to be logged',
+      )
+      const attempts = () => lines.filter((l) => l.includes('connecting to')).length
+      await waitFor(() => attempts() >= 2, 'a second attempt after the busy refusal')
+
+      // Now free the slot and let the retry succeed. This is the whole point:
+      // the node comes back on its own, with no restart. The generation is what
+      // proves the takeover — the nodeId alone is 'contended' throughout, since
+      // the incumbent registered under it too.
+      incumbent.ws.terminate()
+      await waitFor(
+        () => (ctx.nodeRegistry.current?.generation ?? 0) > heldGeneration,
+        'the retrying agent to take the freed slot',
+        10_000,
+      )
+      assert.equal(ctx.nodeRegistry.current?.nodeId, 'contended')
+      assert.ok(
+        !lines.some((l) => l.includes('shutting down')),
+        `the agent must not have stopped.\nGot:\n${lines.map((l) => `  ${l}`).join('\n')}`,
+      )
+    } finally {
+      agent.stop()
+      incumbent.ws.terminate()
+    }
+  })
+
+  it('stops on an auth refusal, which retrying cannot fix, and says why', async () => {
+    await mount(world, { credential: 'the-real-credential' })
+    const lines: string[] = []
+    const terminal: string[] = []
+    const agent = new NodeAgent({
+      url: `ws://127.0.0.1:${port}/node/v1`,
+      nodeId: 'wrong-credential',
+      credential: 'not-the-real-credential',
+      cwd: world,
+      reconnectMinMs: 20,
+      reconnectMaxMs: 40,
+      busyRetryMs: 50,
+      log: (message) => { lines.push(message) },
+      onTerminalRefusal: (code) => { terminal.push(code) },
+    })
+    agent.start()
+    try {
+      await waitFor(() => terminal.length > 0, 'the refusal to be reported as terminal')
+      assert.deepEqual(terminal, ['auth'])
+      // A bad credential does not become good by retrying, so the agent must
+      // NOT keep dialling — otherwise it hammers the host forever.
+      await new Promise((resolve) => { setTimeout(resolve, 200) })
+      const attempts = lines.filter((l) => l.includes('connecting to')).length
+      assert.equal(
+        attempts,
+        1,
+        `a terminal refusal must not be retried.\nGot:\n${lines.map((l) => `  ${l}`).join('\n')}`,
+      )
+      // And the reason must be on the record, since the host's side of it is on
+      // a machine the operator may not be looking at.
+      assert.ok(
+        lines.some((l) => l.includes('refused [auth]') && l.includes('invalid credential')),
+        `expected the refusal reason to be logged.\nGot:\n${lines.map((l) => `  ${l}`).join('\n')}`,
+      )
     } finally {
       agent.stop()
     }

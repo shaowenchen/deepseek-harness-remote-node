@@ -278,3 +278,70 @@ describe('connection diagnostics: a failure says what went wrong', () => {
     }
   })
 })
+
+describe('the exit status says whether restarting could help', () => {
+  /**
+   * Run one CLI process against a server that refuses every registration, and
+   * report how it ended.
+   * @param code - the refusal code the server answers with.
+   * @returns the exit code and everything the process printed.
+   */
+  async function runCliUntilExit(code: 'auth' | 'protocol'): Promise<{ code: number | null; output: string }> {
+    const { WebSocketServer } = await import('ws')
+    const server = new WebSocketServer({ port: 0 })
+    await new Promise<void>((resolve) => { server.once('listening', () => resolve()) })
+    const address = server.address() as { port: number }
+    server.on('connection', (socket: import('ws').WebSocket) => {
+      socket.on('message', () => {
+        socket.send(JSON.stringify({ type: 'refused', code, message: `test refusal: ${code}` }))
+        socket.close(1008, code)
+      })
+    })
+
+    const child = spawn(
+      process.execPath,
+      [
+        join(import.meta.dirname, '..', 'src', 'agent-cli.ts'),
+        '--url', `ws://127.0.0.1:${address.port}/node/v1`, '--credential', 'x',
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+    const output: string[] = []
+    child.stdout.on('data', (b: Buffer) => output.push(b.toString()))
+    child.stderr.on('data', (b: Buffer) => output.push(b.toString()))
+
+    const code2 = await new Promise<number | null>((resolve) => {
+      child.on('exit', (status) => resolve(status))
+      setTimeout(() => { child.kill('SIGKILL'); resolve(null) }, 8000).unref?.()
+    })
+    await new Promise<void>((resolve) => { server.close(() => resolve()) })
+    return { code: code2, output: output.join('') }
+  }
+
+  it('exits 1 on a refusal retrying cannot fix, so on-failure restarts do not loop', async () => {
+    // The status is the whole contract with a service manager: `on-failure`
+    // restarts a crash and correctly does not restart this. Before, the refusal
+    // path drained the event loop and Node exited 0 — so a supervisor set to
+    // `on-failure` would sit on a dead node, and the one set to `always` would
+    // hammer the host forever.
+    const { code, output } = await runCliUntilExit('auth')
+    assert.equal(code, 1, `a terminal refusal must exit 1.\nGot:\n${output}`)
+    // The reason must survive to stderr. This is why the CLI awaits the agent's
+    // lifetime instead of calling `process.exit`: the status has to be returned,
+    // not thrown, or the diagnostic races the exit that kills it.
+    assert.ok(
+      output.includes('refused [auth]'),
+      `expected the refusal reason on stderr.\nGot:\n${output}`,
+    )
+  })
+
+  it('exits 1 on a protocol mismatch too, and does not retry either', async () => {
+    const { code, output } = await runCliUntilExit('protocol')
+    assert.equal(code, 1, `a protocol refusal must exit 1.\nGot:\n${output}`)
+    assert.equal(
+      output.match(/connecting to/g)?.length ?? 0,
+      1,
+      `a protocol refusal must not be retried.\nGot:\n${output}`,
+    )
+  })
+})

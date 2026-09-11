@@ -97,6 +97,11 @@ the caller's limit, slicing inside a chunk, because the local backend does.
 
 **Registration is single-slot.** Two agents driving one machine would corrupt
 each other, so a second connection is refused with `busy` rather than merged.
+That refusal is the one retryable one: the slot frees as soon as the incumbent
+closes, so the refused agent waits and dials again instead of exiting. A node
+running a duplicate agent therefore stays up — but see
+[one agent per node](#on-the-node), because a duplicate is still not a state to
+leave running.
 
 ## Usage
 
@@ -312,6 +317,32 @@ dsh-node --url wss://<host>/node/v1 \
 It logs `registered as <nodeId> (generation 1, cwd ...)` when connected, and
 reconnects with backoff after a drop. `dsh-node --describe` prints this
 machine's identity without connecting.
+
+**Run exactly one agent per node id.** The channel is single-slot, and the node
+id defaults to this machine's hostname, so a second agent for the same id is
+refused as `busy`. That refusal is retried rather than fatal — the agent waits
+for the slot instead of exiting — but two contenders swapping one slot is not a
+state to leave running. The usual cause is a supervisor starting an agent while
+an earlier manual `nohup`/`ssh` one is still alive; check with:
+
+```sh
+pgrep -af agent-cli.js   # expect exactly one line
+```
+
+Two machines that share a hostname collide the same way, permanently, since
+neither is ever the only claimant. Give one of them an explicit
+`--node-id` in that case; two different ids on one host would also "work", but
+they are two execution worlds competing for the same machine, which is the thing
+the single-slot rule exists to prevent.
+
+A refusal does not always mean a duplicate, though. The slot is released when
+the **host** notices the previous connection is gone, and a peer that died
+without a clean close (a killed process, a severed link) is not noticed until the
+heartbeat gives up on it — up to `2 × heartbeatIntervalMs`. A `busy` refusal
+within a few seconds of a restart is that window, not a second agent, and the
+retry clears it on its own. If a machine is being supervised, keep it to one
+supervisor set to restart on failure; the agent exits non-zero only for refusals
+that retrying cannot fix (a protocol mismatch or a bad credential).
 
 The credential must match the one in the host's plugin config. If you used
 `install-host.sh`, it generated one and printed it; the same value is in

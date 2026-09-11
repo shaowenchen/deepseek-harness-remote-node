@@ -23,6 +23,24 @@ export const NODE_CHANNEL_PATH = '/node/v1'
 /** Ping cadence in milliseconds before deployment override. */
 export const DEFAULT_HEARTBEAT_INTERVAL_MS = 2000
 
+/**
+ * How long a refused-but-retryable agent waits before dialling again, in
+ * milliseconds.
+ *
+ * A `busy` refusal means another connection holds the single slot and has not
+ * been reaped yet, not that this one is unwelcome. The host frees that slot on
+ * two events, and the agent cannot see either: a clean close (immediate), or
+ * the heartbeat giving up on an unresponsive peer — one interval to send the
+ * ping, another to terminate when no `pong` comes back, so up to
+ * `2 × heartbeatIntervalMs`. Retrying sooner than that guarantees a second
+ * refusal, which is how a restart turns into a refusal loop.
+ *
+ * The default assumes the default cadence. A deployment that raises
+ * `heartbeatIntervalMs` should raise this to match: it is the one number on the
+ * agent side that has to stay in step with the host's.
+ */
+export const DEFAULT_BUSY_RETRY_MS = 5000
+
 // ── frame types ─────────────────────────────────────────────────────────────
 
 /** First frame the agent sends; carries identity and requests registration. */
@@ -287,7 +305,16 @@ export type NodeRefusalCode =
   | 'protocol'
   /** Unknown node id, or a credential that does not verify. */
   | 'auth'
-  /** Another connection for this node id is already active. */
+  /**
+   * Another connection for this node id is already active.
+   *
+   * The only refusal in this set that is not terminal: the condition is
+   * temporal, and the connection that holds the slot may be a dead one the host
+   * has merely not reaped yet. An agent that treats it as terminal strands the
+   * node for as long as whatever supervises it takes to restart the process —
+   * and if that supervisor is itself the thing creating the duplicate, forever.
+   * See {@link DEFAULT_BUSY_RETRY_MS}.
+   */
   | 'busy'
 
 // ── process and terminal arguments ──────────────────────────────────────────

@@ -25,12 +25,17 @@ Options:
   --node-id <id>         Node identity (default: this machine's hostname)
   --cwd <dir>            Execution world working directory (default: current directory)
   --on-disconnect <mode> orphan | terminate  (default: orphan)
+  --busy-retry <ms>      Wait before retrying a connection the host refused as
+                         busy, because another connection holds the node's
+                         single slot (default: 5000).
   --describe             Print this machine's identity and exit
   -h, --help             Show this help
 
 Exit status:
-  0  stopped cleanly
-  1  bad usage, or the host refused registration
+  0  stopped cleanly (including a signal)
+  1  bad usage
+  1  the host refused registration for a reason retrying cannot fix — a protocol
+     mismatch or a bad credential. A refusal of "busy" is NOT this: it retries.
 `
 
 /** Where a credential installed by an enrollment flow would live. */
@@ -49,6 +54,7 @@ async function main(): Promise<number> {
       'node-id': { type: 'string' },
       cwd: { type: 'string' },
       'on-disconnect': { type: 'string', default: 'orphan' },
+      'busy-retry': { type: 'string' },
       describe: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -89,30 +95,48 @@ async function main(): Promise<number> {
     return 1
   }
 
+  let busyRetryMs: number | undefined
+  if (values['busy-retry'] !== undefined) {
+    busyRetryMs = Number(values['busy-retry'])
+    if (!Number.isFinite(busyRetryMs) || busyRetryMs <= 0) {
+      process.stderr.write(`dsh-node: --busy-retry must be a positive number of milliseconds, got "${values['busy-retry']}"\n`)
+      return 1
+    }
+  }
+
+  // Resolved by the refusal handler below and read after the agent settles.
+  // Set rather than thrown so the process can end on its own terms: see the
+  // comment on {@link NodeAgent.onTerminalRefusal}.
+  let refusalExitCode = 0
+
   const agent = new NodeAgent({
     url: values.url,
     credential,
     nodeId: values['node-id'],
     cwd: values.cwd ?? process.cwd(),
     onDisconnect: mode,
+    busyRetryMs,
     log: (message) => { process.stderr.write(`dsh-node: ${message}\n`) },
+    // `protocol` and `auth` are the two refusals a human has to fix, and the
+    // exit status is how a service manager is told that restarting will not
+    // help. `busy` never arrives here: this agent retries it.
+    onTerminalRefusal: () => { refusalExitCode = 1 },
   })
 
-  // A refusal is terminal — the credential will not become valid by retrying.
-  // `NodeAgent.stop()` on refusal leaves nothing pending, so wait for it and
-  // let the process end naturally.
-  agent.start()
+  // The agent owns the retry loop, so wait for it to finish rather than
+  // polling. It settles on `stop()`: a signal, or a refusal that cannot be
+  // retried.
+  const finished = agent.run()
 
   const shutdown = (signal: string) => {
     process.stderr.write(`dsh-node: ${signal}, shutting down\n`)
     agent.stop()
-    return 0
   }
-  process.on('SIGINT', () => { process.exit(shutdown('SIGINT')) })
-  process.on('SIGTERM', () => { process.exit(shutdown('SIGTERM')) })
+  process.on('SIGINT', () => { shutdown('SIGINT') })
+  process.on('SIGTERM', () => { shutdown('SIGTERM') })
 
-  // Stay alive: the agent owns reconnection, so there is nothing to poll.
-  return await new Promise<number>(() => {})
+  await finished
+  return refusalExitCode
 }
 
 main().then(
