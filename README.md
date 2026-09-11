@@ -119,17 +119,28 @@ the public registry and needs a few hundred MB of scratch space under
 distribution packages. Node 22 is the floor this project requires; 24 (the
 current LTS) is the better default.
 
-```sh
-export NVM_DIR="$HOME/.nvm"
+`PROXY` works here the same way it does below — empty when GitHub is reachable,
+a prepending mirror when it is not. **Set it before the nvm installer, not after:
+nvm fetches `nvm.sh` itself, from the same blocked host, and its installer has no
+proxy option of its own.**
 
-# -- the nvm installer --
-# METHOD=script downloads a tarball instead of git-cloning, so this works on a
-# machine with no git. PROFILE=/dev/null keeps it from editing your rc files.
-curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh \
+```sh
+PROXY=  # if github.com is unreachable, e.g. https://ghproxy.chenshaowen.com
+
+# -- nvm --
+# METHOD=script downloads the scripts instead of git-cloning, which also means
+# this works with no git. PROFILE=/dev/null keeps it from editing your rc files.
+# nvm downloads nvm.sh, nvm-exec and bash_completion from raw.githubusercontent
+# ITSELF, and takes no proxy option — so the mirror has to be applied to the
+# installer's own command line, not just to nvm's.
+curl -fsSL "${PROXY:+$PROXY/}https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.7/install.sh" \
+  | sed "s#https://raw.githubusercontent.com#${PROXY:+$PROXY/}https://raw.githubusercontent.com#g" \
   | METHOD=script PROFILE=/dev/null bash
 
+export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"
 
+# -- Node --
 # nodejs.org is frequently unreachable from the same networks github is. Point
 # nvm at a mirror — it serves the official prebuilt binaries, so nothing is
 # compiled and no toolchain is needed.
@@ -139,6 +150,9 @@ nvm install 22        # or 24, the current LTS
 node -v               # v22.x
 npm -v
 ```
+
+With `PROXY` empty the `sed` is a no-op, so the same block runs unedited on a
+normal network.
 
 Make it survive a new shell — append to `~/.bashrc` (or `~/.zshrc`):
 
