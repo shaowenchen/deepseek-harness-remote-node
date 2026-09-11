@@ -119,6 +119,13 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Repository scaffolding: `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, and
   GitHub issue/PR templates.
 - A package-level README so the npm tarball documents itself.
+- A **pm2** example in the README, since a supervisor that restarts on failure
+  is the recommended way to run the agent and `pm2` needs two things said about
+  it. It passes `--credential-file` rather than `--credential`, because pm2
+  writes its command line into a dump file, and a bearer token there is a
+  disclosure the operator did not intend. And it mounts the wrapper with
+  `--interpreter none` and a `--`: `dsh-node` is a `sh` wrapper the installer
+  generated, not a JavaScript entry point.
 
 ### Changed
 

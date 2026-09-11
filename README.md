@@ -329,6 +329,50 @@ an earlier manual `nohup`/`ssh` one is still alive; check with:
 pgrep -af agent-cli.js   # expect exactly one line
 ```
 
+<details>
+<summary>Keeping it up with pm2</summary>
+
+Any supervisor works, and `pm2` is the one that needs a note — for where a
+credential ends up, and for what `dsh-node` actually is.
+
+**Keep the credential out of the command line.** A `--credential` argument is
+readable by anything that can run `ps`, and pm2 also writes its command line
+into its own dump file — a bearer token, retained somewhere you will not think
+to look for it. Use `--credential-file` instead; it is the same value, at rest
+in a `0600` file:
+
+```sh
+# the subshell umask is what makes the file 0600 — without it the redirection
+# creates it world-readable for the moment before you think to chmod it
+(umask 077; printf '%s\n' '<the value install-host.sh printed>' > ~/.dsh-node-credential)
+
+pm2 start /root/.local/bin/dsh-node --name dsh-node --interpreter none -- \
+  --credential-file ~/.dsh-node-credential \
+  --url wss://<host>/node/v1 \
+  --cwd /root/.deepseek-harness-remote-node
+
+pm2 save    # otherwise the process list does not survive a reboot
+```
+
+**The environment is not a way around that.** pm2 reads `--env` and
+`ecosystem.config.js` from disk, and records both in the dump, so a token moved
+into an environment variable is the same disclosure one indirection later.
+Anything other than the file above should be a secret your supervisor reads at
+launch from a `0600` source.
+
+**Start it from one supervisor only.** pm2's restart-on-failure is exactly the
+scenario the `busy` retry exists for, and exactly the one that must not be
+doubled — a manual `dsh-node` or a second supervisor beside pm2 leaves two
+agents trading the node's single slot. The `pgrep` check above is the one to
+run.
+
+**`--interpreter none` and the `--` are pm2 syntax, not dsh-node's.** `dsh-node`
+is a `sh` wrapper around `agent-cli.js`, with the interpreter path baked in by
+the installer, so it is meant to be executed, not run as JavaScript — and `--`
+is what tells pm2 everything after it belongs to the agent rather than to pm2.
+
+</details>
+
 Two machines that share a hostname collide the same way, permanently, since
 neither is ever the only claimant. Give one of them an explicit
 `--node-id` in that case; two different ids on one host would also "work", but
