@@ -70,6 +70,58 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The adapters never declared the registry they depend on.** `fs-node` and
+  `subprocess-node` read `ctx.nodeRegistry` through a type cast, but cordis
+  guards every service read: an undeclared access throws
+  `cannot get property "nodeRegistry" without inject`, before any operation
+  runs. Every command and file operation failed with an error about the
+  framework rather than about the work. Both now declare
+  `static inject = ['nodeRegistry']`, which also makes load order irrelevant —
+  cordis parks the adapter until the registry appears.
+
+  Found by driving the harness against a real machine. No in-process test could
+  have caught it: the tests mount the registry before the adapters, which is the
+  one order that happened to work.
+
+- **The reconnect timer was `unref()`'d, so the agent exited when it dropped.**
+  Between attempts the socket that was keeping the event loop open is already
+  gone, so Node found an empty loop and exited mid-reconnect. The log said
+  `reconnecting in 287ms` and then the process was simply not there —
+  indistinguishable from a crash, and with no error to search for. `stop()`
+  clears the timer, so the `unref` was doing nothing except killing the agent
+  exactly when it was needed. The regression test spawns a real `agent-cli`
+  process, because in-process the runner's own handles mask the effect.
+
+- **Commands were spawned in the host's working directory, not the node's.**
+  The host sends its own notion of the workspace — `/Users/you/project` as the
+  HARNESS HOST sees it — which does not exist on the node. A nonexistent `cwd`
+  is reported by Node as `spawn <program> ENOENT`, naming the EXECUTABLE, so a
+  Linux node answered "bash is not installed" while bash sat at `/usr/bin/bash`
+  and the real cause stayed invisible.
+
+  `usableCwd` now resolves it on the node, which is the only side that can stat
+  it: a path that exists there is used as given, and one that does not falls
+  back to the directory the agent was started with. Both spawn paths go through
+  it, so terminals and commands agree about where they run.
+
+- A refusal is now recorded on the HOST as well as the agent. The reason a
+  connection was rejected was previously only visible on the node, which then
+  reconnects and retries — and the node is the machine the operator may not be
+  looking at.
+
+### Changed
+
+- **Registration, refusal, and disconnect are reported on the host's stderr.**
+  The host was silent about the one fact an operator most needs: which machine
+  is currently its execution world. The disconnect line carries the count of
+  streams it just failed, which is the difference between a node leaving quietly
+  and work being rejected mid-flight.
+
+  Deliberately stderr rather than `ctx.logger`: that service is a ring buffer
+  with no console exporter in the shipped profiles, so an `info()` there is
+  captured and printed nowhere. A logging call that silently goes nowhere is
+  worse than none, because it reads as coverage that does not exist.
+
 - Corrected the repository URL: the package pointed at `dsh-remote-node`, a name
   that does not exist. The repository was later renamed to
   `deepseek-harness-remote-node`, and every reference follows it.

@@ -56,12 +56,23 @@ deployments where no package manager is available.
 
 # Exactly one execution world may exist. Leaving the host's own providers
 # mounted beside the node's is a composition error, not a fallback.
+#
+# The ids to disable are the ones YOUR profile actually mounts. `fs-sandbox`
+# (which wraps fs-local) and `subprocess` are the ids in the shipped web and
+# headless profiles; `fs-local` / `subprocess-local` exist as packages but are
+# not the ids there, so naming them disables nothing. Check with:
+#   dsh --profile <name> --dump-config | grep -E 'id: (fs|subprocess)'
 - id: fs-sandbox
   disabled: true
-- id: fs-local
+- id: subprocess
   disabled: true
-- id: subprocess-local
-  disabled: true
+
+# The host's sandbox cannot confine the node either. `dsh-sandbox-local` picks
+# its runner (Seatbelt / bwrap / Landlock) from the platform dsh ITSELF runs on,
+# then wraps commands that execute on the node — so a macOS host driving a Linux
+# node emits `sandbox-exec`, which is not there, and every command fails. Until
+# a sandbox provider for the node's platform is mounted, run the host with:
+#   DSH_PERMISSION_MODE=danger-full-access dsh web
 ```
 
 ## Quick start
