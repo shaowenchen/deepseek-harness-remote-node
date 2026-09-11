@@ -20,6 +20,7 @@
  */
 
 import { hostname, platform, arch, homedir } from 'node:os'
+import { stat } from 'node:fs/promises'
 import { WebSocket } from 'ws'
 import {
   NODE_PROTOCOL_VERSION,
@@ -133,6 +134,24 @@ interface OpOutcome {
 }
 
 /**
+ * Whether a path is a directory on this machine.
+ *
+ * A stat that fails for ANY reason answers `false`: the caller uses this to
+ * choose a directory to spawn into, and an unreadable or unresolvable path is
+ * no more usable for that than an absent one. Re-throwing here would turn a
+ * permission quirk on an unrelated candidate into a failed spawn.
+ * @param path - absolute path to test.
+ * @returns true when the path is an existing directory.
+ */
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
  * The process and terminal handles this agent currently owns, keyed by the
  * stream that opened them.
  *
@@ -159,6 +178,47 @@ interface LiveHandles {
  * here also gives the agent one place to ask "what am I still running?", which
  * is what a disconnect policy needs.
  */
+/**
+ * A working directory that actually exists on THIS machine.
+ *
+ * The host sends the `cwd` it believes the world has, and that belief is
+ * routinely wrong: the shell layer passes the session's workspace, which is
+ * the harness host's own path — `/Users/you/project` or `$HOME/...` as the
+ * HOST sees them. Those directories do not exist here.
+ *
+ * Letting that through is worse than a failed spawn, because of how Node
+ * reports it. A bad `cwd` does not raise a directory error; it raises
+ * `spawn <program> ENOENT`, naming the EXECUTABLE. So the user is told `bash`
+ * is missing on a machine where bash is at `/usr/bin/bash`, and the real
+ * fault — a path from another operating system — stays invisible. That
+ * misdirection is what this method removes.
+ *
+ * The rule is deliberately asymmetric:
+ *
+ * - The path exists here → use it. A caller who named `/srv/app` or this
+ *   machine's own `$HOME` meant it, and rewriting that would be the node
+ *   quietly ignoring an explicit instruction.
+ * - The path does not exist here → fall back to the directory this agent was
+ *   started with, which the node's own operator chose and which the installer
+ *   guarantees exists. This is what lets a plain `dsh` session work without
+ *   anyone having to know the remote layout.
+ *
+ * The fallback is itself verified, and the last resort is the process's own
+ * directory: a working directory that does not exist is never worth spawning
+ * into, so there is no path through here that returns one.
+ * @param cwd - the directory the host asked for, if it asked for one.
+ * @param requested - the directory the host asked for, if any.
+ * @param fallback - this agent's own working directory.
+ * @returns a directory that exists on this machine.
+ */
+async function usableCwd(requested: string | undefined, fallback: string): Promise<string> {
+  if (typeof requested === 'string' && requested.length > 0) {
+    if (await isDirectory(requested)) return requested
+  }
+  if (await isDirectory(fallback)) return fallback
+  return process.cwd()
+}
+
 class World implements LiveHandles {
   readonly procs = new Map<number, ProcHandle>()
   readonly ttys = new Map<number, TtyHandle>()
@@ -295,7 +355,7 @@ class World implements LiveHandles {
 
       case 'proc.spawn': {
         const handle = spawnProcess(
-          a as never,
+          { ...(a as object), cwd: await usableCwd((a as { cwd?: string }).cwd, cwd) } as never,
           this.spillDir,
           // A `pipe`-mode stream is forwarded live — the seam hands those to the
           // caller as a raw `Readable`. Collect-mode bytes are NOT forwarded:
@@ -378,7 +438,10 @@ class World implements LiveHandles {
 
       // ── terminals ──
       case 'tty.open': {
-        const handle = openTerminal(a as never)
+        const handle = openTerminal({
+          ...(a as object),
+          cwd: await usableCwd((a as { cwd?: string }).cwd, cwd),
+        } as never)
         this.ttys.set(handle.pid, handle)
         // The stream id is recorded BEFORE the spawn's reply is sent and before
         // any listener is attached: a shell prints its prompt immediately, so a
@@ -657,8 +720,7 @@ export class NodeAgent {
     }
   }
 
-  private async handle(socket: WebSocket, frame: HostFrame): Promise<void> {
-    switch (frame.type) {
+  private async handle(socket: WebSocket, frame: HostFrame): Promise<void> {    switch (frame.type) {
       case 'ping':
         socket.send(encodeControl({ type: 'pong' }))
         return

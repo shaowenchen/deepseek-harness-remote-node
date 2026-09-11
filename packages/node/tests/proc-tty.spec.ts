@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { createServer, type IncomingMessage, type Server } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Socket } from 'node:net'
@@ -128,6 +128,56 @@ describe('proc.*: real processes on the node', () => {
         return true
       },
     )
+  })
+
+  it('spawns into a usable directory when the host sends a path that does not exist here', async () => {
+    // The failure this pins is actively misleading, which is why it gets its
+    // own case. A `cwd` that does not exist produces `spawn <program> ENOENT`
+    // from Node — naming the EXECUTABLE, not the directory. In the field that
+    // read as "bash is not installed on the node" on a machine where bash was
+    // sitting at /usr/bin/bash, and the actual cause (the harness host had sent
+    // its own macOS `/Users/...` workspace to a Linux node) stayed invisible.
+    //
+    // The host always sends its own notion of the workspace, so this is not an
+    // edge case — it is the ordinary path for any session started on the host.
+    await mount()
+    await connect()
+    const started = await ctx.nodeRegistry.invoke<{ pid: number }>('proc.spawn', {
+      argv: ['/bin/sh', '-c', 'pwd'],
+      // A path that cannot exist on this machine, in the shape the host sends.
+      cwd: '/nonexistent-host-workspace/deepseek-harness-remote-node',
+      stdio: { stdin: 'ignore', stdout: { maxBytes: 65536 }, stderr: { maxBytes: 65536 } },
+      graceMs: 2000,
+    })
+    const outcome = await waitPid(started.pid)
+    assert.equal(outcome.exitCode, 0, 'the spawn must succeed rather than fail as a missing executable')
+    const stdout = await ctx.nodeRegistry.invoke<{ text: string }>('proc.read', { pid: started.pid, stream: 'stdout' })
+    // It ran in the agent's own directory — the world the node's operator set
+    // up. `realpath` on both sides because macOS resolves the tmpdir through
+    // the `/private` symlink and `pwd` reports the resolved form.
+    assert.equal(
+      await realpath(stdout.text.trim()),
+      await realpath(world),
+      'the fallback is the registered working directory',
+    )
+  })
+
+  it('honours a working directory that really does exist on the node', async () => {
+    // The other half of the rule: the fallback must not become a silent
+    // override. A caller naming a directory that exists here meant it.
+    await mount()
+    await connect()
+    const sub = join(world, 'sub')
+    await mkdir(sub, { recursive: true })
+    const started = await ctx.nodeRegistry.invoke<{ pid: number }>('proc.spawn', {
+      argv: ['/bin/sh', '-c', 'pwd'],
+      cwd: sub,
+      stdio: { stdin: 'ignore', stdout: { maxBytes: 65536 }, stderr: { maxBytes: 65536 } },
+      graceMs: 2000,
+    })
+    await waitPid(started.pid)
+    const stdout = await ctx.nodeRegistry.invoke<{ text: string }>('proc.read', { pid: started.pid, stream: 'stdout' })
+    assert.equal(await realpath(stdout.text.trim()), await realpath(sub))
   })
 
   it('spawns a process, collects its output, and reports its exit code', async () => {
