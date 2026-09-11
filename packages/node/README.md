@@ -15,7 +15,6 @@ This package contains both halves of the channel:
 
 The `dsh-fs-node` and `dsh-subprocess-node` adapters that map `ctx.fs` and
 `ctx.subprocess` onto this channel live in the main repository.
-
 ## Install
 
 ```sh
@@ -66,11 +65,16 @@ for the full boundary description and reporting process.
 
 ## Status
 
-**P0 + filesystem.** The channel, registration, heartbeat, fail-closed
-semantics, and the `fs.*` operation family are implemented and tested
-end-to-end. `proc.*` and `tty.*` are **not** implemented: the agent advertises
-only what it implements, so a host refuses those early with `unsupported`
-rather than hanging on them.
+**Complete.** The channel, registration, heartbeat, fail-closed semantics, and
+all three operation families (`fs.*`, `proc.*`, `tty.*`) are implemented and
+tested end-to-end over real sockets, real process trees, and real PTYs.
+
+`tty.*` is advertised **conditionally**: it needs a PTY substrate
+([`node-pty`](https://www.npmjs.com/package/node-pty)) on the node, which is
+declared as an *optional* dependency so a machine without a usable native build
+still serves `fs.*` and `proc.*`. Where no substrate loads, the agent omits the
+`tty.*` operations and a host refuses them early with `unsupported` rather than
+hanging on them.
 
 ## License
 

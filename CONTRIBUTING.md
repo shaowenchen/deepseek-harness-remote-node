@@ -50,15 +50,18 @@ one of those tests inconvenient, the property is what is right — not the test.
 
 ### 2. Advertise only what you implement
 
-`IMPLEMENTED_OPERATIONS` in `src/agent.ts` is kept directly beside the `execute`
+`implementedOperations()` in `src/agent.ts` is kept directly beside the `execute`
 switch that fulfils it, because a capability list maintained separately from its
 implementation drifts — and a drifted list is worse than no list, since the host
 would promise the model work the node cannot do. When you add an operation,
 update both, and have it answer `unsupported` until it genuinely works.
 
-`proc.*`, `tty.*`, and `fs.editText` are currently declared in the protocol but
-deliberately **not** implemented. They exist so the vocabulary is stable, not as
-a promise. Do not advertise them until they work.
+The explicit case is `tty.*`: those operations are advertised only when a PTY
+substrate loads, because a terminal on a machine without one is genuinely
+unimplementable rather than merely unwritten. That is the pattern to reach for
+when whether a capability works depends on the machine rather than the build.
+Everything declared in the protocol vocabulary is otherwise implemented; nothing
+is left declared-but-refused as a placeholder.
 
 ## Code style
 

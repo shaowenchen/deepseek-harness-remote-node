@@ -61,7 +61,6 @@ fi
 
 PROFILE_DIR="$DSH_HOME/profiles/web"
 SCOPE_DIR="$PROFILE_DIR/node_modules/@shaowenchen"
-LINK_PATH="$SCOPE_DIR/dsh-node"
 PATCH_FILE="$PROFILE_DIR/cordis.patch.yml"
 
 say() { printf '%s\n' "$*"; }
@@ -123,19 +122,38 @@ fi
 
 # ── 3. Build ─────────────────────────────────────────────────────────────────
 # `npm ci` when a lockfile is present so the install is reproducible.
+#
+# All three packages are built and linked, in dependency order: the two adapters
+# resolve `@shaowenchen/dsh-node` through a `file:../node` dependency, so the
+# agent must be built before them. Linking only the agent would leave a channel
+# that nothing reads from.
+REPO_DIR=$(dirname -- "$(dirname -- "$PKG_DIR")")
+ADAPTER_DIRS="fs-node subprocess-node"
+
 say "[2/5] installing dependencies and building"
-if [ "$DRY_RUN" -eq 1 ]; then
-  say "  would: npm ci (or npm install) and npm run build in $PKG_DIR"
-else
-  command -v npm >/dev/null 2>&1 || die "npm is required to build; install Node 22+ first"
-  if [ -f "$PKG_DIR/package-lock.json" ]; then
-    ( cd "$PKG_DIR" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
-  else
-    ( cd "$PKG_DIR" && npm install --no-audit --no-fund >/dev/null )
+build_package() {
+  pkg="$1"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "  would: npm ci (or npm install) and npm run build in $pkg"
+    return
   fi
-  ( cd "$PKG_DIR" && npm run build >/dev/null )
-  [ -f "$PKG_DIR/lib/index.js" ] || die "build produced no lib/index.js"
-fi
+  command -v npm >/dev/null 2>&1 || die "npm is required to build; install Node 22+ first"
+  if [ -f "$pkg/package-lock.json" ]; then
+    ( cd "$pkg" && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
+  else
+    ( cd "$pkg" && npm install --no-audit --no-fund >/dev/null )
+  fi
+  ( cd "$pkg" && npm run build >/dev/null )
+  [ -f "$pkg/lib/index.js" ] || die "build produced no lib/index.js in $pkg"
+}
+build_package "$PKG_DIR"
+for adapter in $ADAPTER_DIRS; do
+  if [ -f "$REPO_DIR/packages/$adapter/package.json" ]; then
+    build_package "$REPO_DIR/packages/$adapter"
+  else
+    say "      note: packages/$adapter not present in this revision — skipping"
+  fi
+done
 say "      ok"
 
 # ── 4. Link into the profile ─────────────────────────────────────────────────
@@ -144,16 +162,27 @@ say "      ok"
 # instance.
 say "[3/5] linking into the web profile"
 run mkdir -p "$SCOPE_DIR"
-if [ "$DRY_RUN" -eq 0 ]; then
+link_package() {
+  name="$1"; src="$2"
+  target="$SCOPE_DIR/$name"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "  would: link $src -> $target"
+    return
+  fi
   # Replace any previous link, but never delete a real directory someone else
   # may own: refuse instead, so an unexpected layout surfaces rather than being
   # silently destroyed.
-  if [ -e "$LINK_PATH" ] && [ ! -L "$LINK_PATH" ]; then
-    die "$LINK_PATH exists and is not a symlink; move it aside first"
+  if [ -e "$target" ] && [ ! -L "$target" ]; then
+    die "$target exists and is not a symlink; move it aside first"
   fi
-  rm -f "$LINK_PATH"
-  ln -s "$PKG_DIR" "$LINK_PATH"
-fi
+  rm -f "$target"
+  ln -s "$src" "$target"
+}
+link_package dsh-node "$PKG_DIR"
+for adapter in $ADAPTER_DIRS; do
+  [ -f "$REPO_DIR/packages/$adapter/package.json" ] || continue
+  link_package "dsh-$adapter" "$REPO_DIR/packages/$adapter"
+done
 say "      ok"
 
 # ── 5. Register the plugin in the patch layer ────────────────────────────────
@@ -180,6 +209,13 @@ else
     printf -- '        cwd: %s\n' "$WORKSPACE_CWD"
     printf -- '        heartbeatIntervalMs: 2000\n'
     printf -- '        onDisconnect: orphan\n'
+    # The two adapters are what actually move the execution world: without them
+    # the registry is a channel nothing reads from, and the host's own
+    # filesystem and subprocess providers keep serving the agent.
+    printf -- '    - id: fs-node\n'
+    printf -- "      name: '@shaowenchen/dsh-fs-node'\n"
+    printf -- '    - id: subprocess-node\n'
+    printf -- "      name: '@shaowenchen/dsh-subprocess-node'\n"
   } >> "$PATCH_FILE"
   say "      ok"
 fi
@@ -188,15 +224,24 @@ fi
 say "[5/5] done"
 say ""
 say "Next:"
-say "  1. Make the node authoritative by appending this to $PATCH_FILE"
-say "     (until you do, the host's own filesystem still serves the agent):"
+say "  Make the node authoritative by appending this to $PATCH_FILE."
 say ""
-say "         - id: fs-sandbox"
-say "           disabled: true"
+say "  This is left to you on purpose rather than done above: disabling the"
+say "  host's own providers is a decision about THIS deployment, and doing it"
+say "  silently would stop the agent from working on the host at all the moment"
+say "  no node is connected. Until you append it, the host's own filesystem and"
+say "  subprocess providers still serve the agent."
 say ""
-say "  2. Confirm the composition resolves without booting:"
+say "      - id: fs-sandbox"
+say "        disabled: true"
+say "      - id: fs-local"
+say "        disabled: true"
+say "      - id: subprocess-local"
+say "        disabled: true"
 say ""
-say "         dsh --profile web --dump-config | grep -A4 node-registry"
+say "  Confirm the composition resolves without booting:"
+say ""
+say "      dsh --profile web --dump-config | grep -A6 node-registry"
 say ""
 say "  3. Start the host and connect a node:"
 say ""

@@ -58,6 +58,28 @@ export interface OpEndFrame {
   type: 'op.end'
   streamId: number
   result: unknown
+  /**
+   * Whether payload frames keep arriving after this reply.
+   *
+   * A `tty.open` reply is not the end of its stream: the terminal goes on
+   * producing output for as long as it lives, so the host must keep its payload
+   * iterator open and end it on {@link OpPayloadEndFrame} instead. A `false` or
+   * absent flag means the reply settles the whole stream, which is the shape
+   * every unary operation has.
+   */
+  payloadContinues?: boolean
+}
+
+/**
+ * Ends a stream's payload without a result change.
+ *
+ * Sent when a long-lived payload producer finishes — a terminal exits — so the
+ * host's reader terminates on the real event rather than on a timeout or a
+ * disconnect.
+ */
+export interface OpPayloadEndFrame {
+  type: 'op.payloadEnd'
+  streamId: number
 }
 
 /** Fails one logical stream. */
@@ -76,6 +98,72 @@ export interface PingFrame {
 /** Liveness answer. */
 export interface PongFrame {
   type: 'pong'
+}
+
+// ── payload frames ──────────────────────────────────────────────────────────
+
+/**
+ * Which logical channel a binary payload frame belongs to.
+ *
+ * A stream carries at most one payload channel, but the channel is named
+ * explicitly rather than inferred from the operation because the two process
+ * families disagree about direction: a `proc.*` stdin frame travels host→node
+ * while its stdout travels node→host, and a reader must be able to tell a
+ * process's stderr from its stdout without consulting the operation that opened
+ * the stream. `opaque` is the channel for payload a caller interprets itself.
+ */
+export const PAYLOAD_KIND = {
+  opaque: 0,
+  stdout: 1,
+  stderr: 2,
+  stdin: 3,
+} as const
+
+/** One payload channel name. */
+export type PayloadKind = keyof typeof PAYLOAD_KIND
+
+/**
+ * The number assigned to an unknown kind, so a decoder can reject it rather
+ * than silently treating a future channel as `opaque`.
+ */
+const KNOWN_KINDS: readonly number[] = Object.values(PAYLOAD_KIND)
+
+/**
+ * Build one binary payload frame: a 4-byte big-endian stream id, a 1-byte kind,
+ * then the bytes.
+ *
+ * The stream id is fixed-width so a frame can be routed without parsing the
+ * payload, and the kind is a separate byte rather than a prefix on the payload
+ * so a payload is never reinterpreted to find its own channel.
+ * @param streamId - the logical stream this payload belongs to.
+ * @param kind - the payload channel.
+ * @param bytes - the payload.
+ * @returns the frame to send as one binary WebSocket message.
+ */
+export function encodePayload(streamId: number, kind: PayloadKind, bytes: Uint8Array): Buffer {
+  const frame = Buffer.allocUnsafe(5 + bytes.length)
+  frame.writeUInt32BE(streamId, 0)
+  frame.writeUInt8(PAYLOAD_KIND[kind], 4)
+  frame.set(bytes, 5)
+  return frame
+}
+
+/**
+ * Decode one binary payload frame.
+ * @param frame - the received binary message.
+ * @returns the stream id, channel, and payload; or undefined when the frame is
+ *   too short or names a channel this protocol does not know.
+ */
+export function decodePayload(
+  frame: Uint8Array,
+): { streamId: number; kind: PayloadKind; bytes: Uint8Array } | undefined {
+  if (frame.length < 5) return undefined
+  const view = Buffer.isBuffer(frame) ? frame : Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)
+  const kindCode = view.readUInt8(4)
+  if (!KNOWN_KINDS.includes(kindCode)) return undefined
+  const kind = (Object.keys(PAYLOAD_KIND) as PayloadKind[])
+    .find((name) => PAYLOAD_KIND[name] === kindCode)!
+  return { streamId: view.readUInt32BE(0), kind, bytes: view.subarray(5) }
 }
 
 /**
@@ -106,6 +194,7 @@ export type AgentFrame =
   | HelloFrame
   | OpEndFrame
   | OpErrorFrame
+  | OpPayloadEndFrame
   | PongFrame
 
 /** Frames the host sends to the agent. */
@@ -150,7 +239,7 @@ export type NodeOperation =
   // ── ordinary processes (ctx.subprocess.spawn) ──
   | 'proc.resolve'
   | 'proc.spawn'
-  | 'proc.write'
+  | 'proc.read'
   | 'proc.signal'
   | 'proc.wait'
   // ── terminals (ctx.subprocess.spawnTerminal) ──
@@ -158,6 +247,8 @@ export type NodeOperation =
   | 'tty.write'
   | 'tty.resize'
   | 'tty.signal'
+  | 'tty.inspect'
+  | 'tty.wait'
   | 'tty.close'
 
 /** Operation family, so a host can fail early against `capabilities`. */
@@ -199,6 +290,118 @@ export type NodeRefusalCode =
   /** Another connection for this node id is already active. */
   | 'busy'
 
+// ── process and terminal arguments ──────────────────────────────────────────
+
+/**
+ * One output stream's disposition, mirroring `SubprocessOutputMode`.
+ *
+ * `inherit` cannot cross a wire — the node's own stdout is not the host's — so
+ * it is refused rather than silently reinterpreted as something else.
+ */
+export type NodeOutputMode =
+  | 'pipe'
+  | {
+      /** In-memory cap in bytes; overflow keeps the TAIL. */
+      maxBytes: number
+      /** Whole-stream byte cap for a spill file, when one should be kept. */
+      spillMaxBytes?: number
+    }
+
+/** Per-stream stdio dispositions, mirroring `SubprocessStdio`. */
+export interface NodeStdio {
+  stdin: 'ignore' | 'pipe' | { readonly data: string }
+  stdout: NodeOutputMode
+  stderr: NodeOutputMode
+}
+
+/** `proc.resolve` arguments. */
+export interface ProcResolveArgs {
+  command: string
+  env?: Readonly<Record<string, string>>
+}
+
+/** `proc.spawn` arguments: a fully-specified request, no defaults applied. */
+export interface ProcSpawnArgs {
+  argv: readonly string[]
+  cwd: string
+  stdio: NodeStdio
+  /** TERM→KILL escalation grace, in milliseconds. */
+  graceMs: number
+  env?: NodeJS.ProcessEnv
+}
+
+/**
+ * `proc.spawn`'s result, delivered once the child is live.
+ *
+ * `done` is a separate stream from the output: the host needs the pid and the
+ * stream ids before it can read anything, and waiting for exit to learn them
+ * would make a streaming consumer impossible.
+ */
+export interface ProcSpawnResult {
+  /** Process id of the tree root; -1 when the spawn itself failed. */
+  pid: number
+  /** Whether the agent is collecting on stdout / stderr, so the host knows to read. */
+  collected: { stdout: boolean; stderr: boolean }
+  /** Payload channel each collected stream is delivered on. */
+  kinds: { stdout: PayloadKind; stderr: PayloadKind }
+}
+
+/** `proc.wait` and `tty.wait` result: the closed process's exit facts. */
+export interface NodeProcessOutcome {
+  exitCode: number | null
+  signal: string | null
+}
+
+/** One incremental collected-output read, mirroring `SubprocessOutputRead`. */
+export interface NodeOutputRead {
+  text: string
+  nextOffset: number
+  lossy: boolean
+  spillPath?: string
+}
+
+/** `proc.signal` arguments. */
+export interface ProcSignalArgs {
+  pid: number
+  signal: NodeJS.Signals
+}
+
+/** `tty.open` arguments, mirroring `SubprocessTerminalSpawnSpec`. */
+export interface TtyOpenArgs {
+  argv: readonly string[]
+  cwd: string
+  env?: Record<string, string>
+  rows: number
+  cols: number
+  graceMs: number
+}
+
+/** `tty.open`'s result. */
+export interface TtyOpenResult {
+  pid: number
+  /** Payload channel terminal output arrives on. */
+  kind: PayloadKind
+}
+
+/** `tty.resize` arguments. */
+export interface TtyResizeArgs {
+  pid: number
+  rows: number
+  cols: number
+}
+
+/** `tty.signal` arguments. */
+export interface TtySignalArgs {
+  pid: number
+  signal: string
+}
+
+/** Foreground process-group facts, mirroring `SubprocessTerminalForeground`. */
+export interface TtyForeground {
+  processGroupId: number
+  inputWaiting: boolean
+}
+
 // ── frames on the wire ──────────────────────────────────────────────────────
 
 /**
@@ -237,7 +440,7 @@ export function decodeControl(text: string): NodeFrame | undefined {
 }
 
 const HOST_FRAME_TYPES = new Set(['ready', 'refused', 'op.open', 'op.cancel', 'ping'])
-const AGENT_FRAME_TYPES = new Set(['hello', 'op.end', 'op.error', 'pong'])
+const AGENT_FRAME_TYPES = new Set(['hello', 'op.end', 'op.error', 'op.payloadEnd', 'pong'])
 
 /**
  * Whether a decoded frame is one only the host may send.

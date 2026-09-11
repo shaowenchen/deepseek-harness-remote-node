@@ -76,6 +76,18 @@ until verification lands.
   rather than reaping them. This is deliberate — a blip must not kill a running
   build — but it means processes outlive the channel. Use `terminate` where that
   is not acceptable.
+- **`proc.*` is arbitrary code execution on the node.** Once a client is
+  registered, `proc.spawn` runs any executable that machine can run, with the
+  agent user's privileges, and `tty.*` opens interactive sessions with the same
+  reach. There is no allow-list and no command policy: the sandbox is the agent's
+  OS identity and whatever container or VM it runs in. This is the same boundary
+  the filesystem family already draws, stated plainly because "run a command" is
+  the capability people underestimate.
+- **Child processes get a scrubbed environment, but not a confined one.** The
+  agent passes the child the environment the host specified, and does not forward
+  credential-shaped or `DSH_*` names implicitly. That protects against *leaking*
+  the harness's own secrets into a child; it does not stop a command the host
+  asked for from reading anything the agent user can read.
 
 ## Deployment checklist
 

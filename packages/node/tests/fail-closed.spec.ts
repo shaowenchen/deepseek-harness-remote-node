@@ -22,6 +22,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { WebSocket } from 'ws'
 import { NodeAgent } from '../src/agent.ts'
 import { encodeControl } from '../src/protocol.ts'
+import { ptyAvailable } from '../src/tty-ops.ts'
 import { NodeError, NodeRegistry } from '../src/index.ts'
 
 type UpgradeHandler = (req: IncomingMessage, socket: Socket, head: Buffer) => void
@@ -266,13 +267,20 @@ describe('agent integration', () => {
       // The agent advertises exactly what it implements — never more, or the
       // host would promise the model work the node cannot do.
       assert.ok(ctx.nodeRegistry.current?.capabilities.includes('fs.list'))
-      assert.ok(!ctx.nodeRegistry.current?.capabilities.includes('proc.spawn'))
+      assert.ok(ctx.nodeRegistry.current?.capabilities.includes('proc.spawn'))
+      // Terminals are conditional on a usable PTY substrate, so the advertised
+      // list must track what THIS machine can actually do rather than a
+      // build-time constant.
+      assert.equal(
+        ctx.nodeRegistry.current?.capabilities.includes('tty.open'),
+        ptyAvailable(),
+      )
     } finally {
       agent.stop()
     }
   })
 
-  it('answers an unimplemented operation with a typed refusal, not a hang', async () => {
+  it('answers an operation it cannot perform with a typed refusal, not a hang', async () => {
     await mount()
     const agent = new NodeAgent({
       url: `ws://127.0.0.1:${port}/node/v1`,
@@ -283,16 +291,27 @@ describe('agent integration', () => {
     agent.start()
     try {
       await waitFor(() => ctx.nodeRegistry.current !== undefined, 'the agent to register')
-      await assert.rejects(
-        () => ctx.nodeRegistry.invoke('proc.spawn', { argv: ['echo', 'hi'] }),
-        (error: unknown) => {
-          assert.ok(error instanceof NodeError)
-          // Process operations are not implemented yet; the honest answer is
-          // `unsupported`, and it must arrive rather than hang.
-          assert.equal(error.code, 'unsupported')
-          return true
-        },
-      )
+      // A terminal on a machine with no PTY substrate is the unimplemented
+      // case, and it must arrive as a typed `unsupported` rather than hanging.
+      // Where the substrate IS present, the equivalent honest answer comes from
+      // a request the node refuses on policy — either way the property under
+      // test is the same: a failure crosses the wire instead of stalling.
+      const rejectsTyped = (expected: string) => (error: unknown) => {
+        assert.ok(error instanceof NodeError)
+        assert.equal(error.code, expected)
+        return true
+      }
+      if (ptyAvailable()) {
+        await assert.rejects(
+          () => ctx.nodeRegistry.invoke('tty.open', { argv: [], cwd: world, rows: 24, cols: 80, graceMs: 1000 }),
+          rejectsTyped('policy'),
+        )
+      } else {
+        await assert.rejects(
+          () => ctx.nodeRegistry.invoke('tty.open', { argv: ['/bin/sh'], cwd: world, rows: 24, cols: 80, graceMs: 1000 }),
+          rejectsTyped('unsupported'),
+        )
+      }
     } finally {
       agent.stop()
     }

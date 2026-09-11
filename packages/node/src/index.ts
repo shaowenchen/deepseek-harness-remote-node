@@ -25,11 +25,14 @@ import {
   NODE_CHANNEL_PATH,
   NODE_PROTOCOL_VERSION,
   decodeControl,
+  decodePayload,
   encodeControl,
+  encodePayload,
   isAgentFrame,
   type NodeErrorCode,
   type NodeOperation,
   type NodeRefusalCode,
+  type PayloadKind,
 } from './protocol.ts'
 
 export * from './protocol.ts'
@@ -73,10 +76,20 @@ export interface NodeDescriptor {
 export interface NodeStream {
   /** Payload frames arriving for this stream, ending when it settles. */
   readonly chunks: AsyncIterable<Uint8Array>
+  /**
+   * Payload frames tagged with the channel they arrived on.
+   *
+   * Same bytes as {@link chunks}, but a consumer that must tell a process's
+   * stderr from its stdout reads this instead. Both iterators share one queue,
+   * so a consumer chooses one of them and never both.
+   */
+  readonly tagged: AsyncIterable<{ kind: PayloadKind; bytes: Uint8Array }>
   /** Settles with the operation's result, or rejects with {@link NodeError}. */
   readonly result: Promise<unknown>
   /** Cancels the stream; the peer answers `op.error` code `cancelled`. */
   cancel(): void
+  /** Writes to the peer's stdin channel for this stream. */
+  write(bytes: Uint8Array): void
 }
 
 /** Thrown by every registry failure that crosses to a caller. */
@@ -206,6 +219,7 @@ export class NodeRegistry extends Service {
 
     return {
       chunks: plumbing.chunks(),
+      tagged: plumbing.tagged(),
       result: plumbing.result,
       cancel: () => {
         // Only the socket that opened this stream may cancel it; a reconnected
@@ -214,29 +228,55 @@ export class NodeRegistry extends Service {
           socket.send(encodeControl({ type: 'op.cancel', streamId }))
         }
       },
+      write: (bytes: Uint8Array) => {
+        if (this.socket === socket && socket.readyState === socket.OPEN) {
+          socket.send(encodePayload(streamId, 'stdin', bytes), { binary: true })
+        }
+      },
     }
   }
 
   /**
    * Run a unary operation and await its result.
    *
-   * Payload frames are discarded, but a failure raised by either channel wins:
-   * draining alone would swallow an `op.error` that the iterator surfaced, and
-   * awaiting the result alone would ignore a mid-stream disconnect. Racing the
-   * two keeps every failure path observable.
+   * Deliberately waits on `result` ALONE and does not drain the payload
+   * iterator. `result` already carries every failure path — an `op.error` frame
+   * and a mid-stream disconnect both reject it — while the payload is not
+   * something a unary caller asked for. Draining it would be worse than
+   * pointless: a stream whose payload outlives its reply (`payloadContinues`,
+   * which a `proc.spawn` with a piped stream sets) does not end until that
+   * stream closes, so awaiting the drain would block for as long as a remote
+   * process chooses to keep its pipe open.
+   *
+   * An operation with a payload to read uses {@link open} instead; this is for
+   * the answer-only case.
+   *
+   * A caller-supplied signal bounds only the WAIT. The cancellation does not
+   * reach the node, so an abandoned operation still completes there; what the
+   * signal guarantees is that this caller stops waiting, which is what it can
+   * observe. Aborting does not kill anything — teardown is an explicit signal.
    * @param op - the operation to perform.
    * @param args - operation arguments.
+   * @param signal - aborts the wait.
    * @returns the operation's decoded result.
    */
-  async invoke<T>(op: NodeOperation, args: unknown): Promise<T> {
+  async invoke<T>(op: NodeOperation, args: unknown, signal?: AbortSignal): Promise<T> {
     const stream = this.open(op, args)
-    const drained = (async () => {
-      for await (const _ of stream.chunks) void _
-    })()
-    // A unary operation sends no payload frames, so `drained` normally settles
-    // only after the terminal frame; `result` is what carries the value.
-    const [value] = await Promise.all([stream.result, drained])
-    return value as T
+    const settled = stream.result as Promise<T>
+    if (!signal) return await settled
+    if (signal.aborted) {
+      stream.cancel()
+      throw new NodeError('cancelled', `${op} aborted before it completed`)
+    }
+    return await Promise.race([
+      settled,
+      new Promise<never>((_, reject) => {
+        signal.addEventListener('abort', () => {
+          stream.cancel()
+          reject(new NodeError('cancelled', `${op} aborted`))
+        }, { once: true })
+      }),
+    ])
   }
 
   /** @internal Adopt a freshly upgraded socket as the node channel. */
@@ -246,8 +286,9 @@ export class NodeRegistry extends Service {
     socket.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
       if (isBinary) {
         const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer)
-        if (bytes.length < 4) return
-        this.streams.get(bytes.readUInt32BE(0))?.push(bytes.subarray(4))
+        const frame = decodePayload(bytes)
+        if (!frame) return
+        this.streams.get(frame.streamId)?.push(frame.bytes, frame.kind)
         return
       }
 
@@ -298,8 +339,23 @@ export class NodeRegistry extends Service {
         case 'op.end': {
           const plumbing = this.streams.get(frame.streamId)
           if (plumbing) {
-            this.streams.delete(frame.streamId)
+            // A stream whose payload outlives its reply stays registered: the
+            // result is published, but the iterator keeps yielding until the
+            // producer sends `op.payloadEnd`. Anything else settles wholly here.
+            if (!frame.payloadContinues) this.streams.delete(frame.streamId)
             plumbing.resolve(frame.result)
+            if (frame.payloadContinues) plumbing.holdPayload()
+          }
+          return
+        }
+
+        case 'op.payloadEnd': {
+          // Ends the reader without touching the result: a terminal's output is
+          // over, but the operation that opened it already succeeded.
+          const plumbing = this.streams.get(frame.streamId)
+          if (plumbing) {
+            this.streams.delete(frame.streamId)
+            plumbing.endPayload()
           }
           return
         }
@@ -400,9 +456,13 @@ export class NodeRegistry extends Service {
 class StreamPlumbing {
   readonly result: Promise<unknown>
 
-  private readonly queue: Uint8Array[] = []
+  private readonly queue: { kind: PayloadKind; bytes: Uint8Array }[] = []
   private notify: (() => void) | undefined
   private settled = false
+  /** The result arrived, but payload frames are still expected. */
+  private pendingPayload = false
+  /** The producer signalled that no more payload will arrive. */
+  private payloadEnded = false
   private failure: NodeError | undefined
   private readonly settleResolve: (value: unknown) => void
   private readonly settleReject: (error: NodeError) => void
@@ -419,8 +479,27 @@ class StreamPlumbing {
     void this.result.catch(() => {})
   }
 
-  push(chunk: Uint8Array): void {
-    this.queue.push(chunk)
+  push(bytes: Uint8Array, kind: PayloadKind = 'opaque'): void {
+    this.queue.push({ kind, bytes })
+    this.wake()
+  }
+
+  /**
+   * Mark that the result is published while payload frames keep coming.
+   *
+   * Set when an `op.end` arrived with `payloadContinues`: the stream stays
+   * registered so later frames still route here, and its iterators must not end
+   * merely because the result settled.
+   */
+  holdPayload(): void {
+    this.pendingPayload = true
+    this.wake()
+  }
+
+  /** End the payload without a second result; the producer is finished. */
+  endPayload(): void {
+    this.pendingPayload = false
+    this.payloadEnded = true
     this.wake()
   }
 
@@ -439,20 +518,41 @@ class StreamPlumbing {
     this.wake()
   }
 
-  chunks(): AsyncIterable<Uint8Array> {
+  /**
+   * The shared cursor over queued frames.
+   *
+   * Both public iterators read this one queue, so whichever a caller picks
+   * advances the single stream. A caller that read both would see each frame
+   * once, split arbitrarily between them — which is why the seam documents
+   * choosing one.
+   */
+  private cursor<Out>(project: (frame: { kind: PayloadKind; bytes: Uint8Array }) => Out): AsyncIterable<Out> {
     return {
       [Symbol.asyncIterator]: () => ({
-        next: async (): Promise<IteratorResult<Uint8Array>> => {
+        next: async (): Promise<IteratorResult<Out>> => {
           for (;;) {
-            const chunk = this.queue.shift()
-            if (chunk) return { done: false, value: chunk }
+            const frame = this.queue.shift()
+            if (frame) return { done: false, value: project(frame) }
             if (this.failure) throw this.failure
-            if (this.settled) return { done: true, value: undefined as never }
+            // A settled result normally ends the stream — unless the producer
+            // said its payload outlives the reply, in which case the iterator
+            // waits for the explicit end rather than closing on the result.
+            if (this.settled && (!this.pendingPayload || this.payloadEnded)) {
+              return { done: true, value: undefined as never }
+            }
             await new Promise<void>((resolve) => { this.notify = resolve })
           }
         },
       }),
     }
+  }
+
+  chunks(): AsyncIterable<Uint8Array> {
+    return this.cursor((frame) => frame.bytes)
+  }
+
+  tagged(): AsyncIterable<{ kind: PayloadKind; bytes: Uint8Array }> {
+    return this.cursor((frame) => frame)
   }
 
   private wake(): void {

@@ -18,14 +18,30 @@ No inbound port. No public address. No NAT traversal on the remote side.
 | | |
 |---|---|
 | ✅ **Works** | Channel, registration, heartbeat, fail-closed semantics, and the full `fs.*` operation family — tested end-to-end against a real HTTP server, real upgrades, and real sockets. |
+| ✅ **Works** | The full `proc.*` family (commands) — real process trees with tree-scoped `SIGTERM`→grace→`SIGKILL` escalation, bounded collected output with spill recovery, and live stdin. |
+| ✅ **Works** | The full `tty.*` family (terminals) — real PTYs, resize, and foreground-group signalling. Requires a PTY substrate on the node; see below. |
 | ✅ **Works** | **`@shaowenchen/dsh-fs-node`** — the adapter that serves `ctx.fs` from the node, so the agent's file operations actually happen there. Its behaviour is verified against the real local backend. |
-| ❌ **Not implemented** | The whole `proc.*` family (commands) and `tty.*` family (terminals), and the `dsh-subprocess-node` adapter that would consume them. |
-| 🚧 **Next** | `dsh-subprocess-node`, so commands, terminals, and language servers run on the node too. |
-| ⚠️ **Not published** | Neither package is **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
+| ✅ **Works** | **`@shaowenchen/dsh-subprocess-node`** — the adapter that serves `ctx.subprocess` from the node, so commands, terminals, and language servers run there too. Verified against `dsh-subprocess-local`. |
+| ⚠️ **Conditional** | `tty.*` needs a usable **`node-pty`** on the node. `node-pty` is an *optional* dependency, so an install without a native build still works — the agent then advertises `fs.*` and `proc.*` only. |
+| ⚠️ **Not published** | No package is **on the npm registry yet**. Install from GitHub (see [Install](#install)). |
 
 The agent advertises only what it implements, so the host refuses unimplemented
 operations early with `unsupported` rather than hanging on them — see
-`IMPLEMENTED_OPERATIONS` in [`src/agent.ts`](packages/node/src/agent.ts).
+`implementedOperations()` in [`src/agent.ts`](packages/node/src/agent.ts).
+
+### Why terminals are conditional
+
+`fs.*` and `proc.*` are built on Node alone; `tty.*` needs a **PTY**, because a
+program decides how to behave from whether its stdin is a terminal. A pipe
+cannot answer that question, so a terminal over a pipe would run the user's
+shell in a non-interactive mode and break anything that prompts or pages.
+
+That substrate is `node-pty`, a native module. It is declared as an **optional**
+dependency, which is the load-bearing decision: a machine where its native build
+fails still installs the agent and still serves the filesystem and process
+families the harness needs, and the agent reports `tty.*` as unimplemented rather
+than failing at the first terminal. `node-pty` ships prebuilds for common
+platforms, so in practice most nodes have terminals.
 
 > ### ⚠️ Read this before deploying
 >
@@ -64,8 +80,8 @@ third-party cloud SDK" with "a protocol we define".
         │    └ /node/v1          ← node channel        │
         │                                              │
         │  ctx.nodeRegistry ──── dsh-node              │
-        │  ctx.fs ........... (fs-sandbox disabled)    │
-        │  ctx.subprocess ... (subprocess-local stays) │
+        │  ctx.fs ........... dsh-fs-node              │
+        │  ctx.subprocess ... dsh-subprocess-node      │
         └───────────────────▲──────────────────────────┘
                             │ wss, dialled OUT by the node
         ┌───────────────────┴──────────────────────────┐
@@ -74,10 +90,25 @@ third-party cloud SDK" with "a protocol we define".
         └──────────────────────────────────────────────┘
 ```
 
+Both capability seams point at the node, which is what makes this machine an
+execution world: the paths `ctx.fs` resolves are the paths `ctx.subprocess` runs
+in, because they are the same machine's.
+
 One WebSocket carries every logical stream, multiplexed by `streamId`. Control
-frames are JSON text; payload frames are binary. The split is deliberate —
-paths and file bytes travel on the binary side so a remote path never passes
-through a text channel that could reinterpret it.
+frames are JSON text; payload frames are binary, each tagged with the channel it
+belongs to (`stdout` / `stderr` / `stdin` / `opaque`) so a reader can tell one
+process's streams apart without consulting the operation that opened them. The
+split is deliberate — paths and file bytes travel on the binary side so a remote
+path never passes through a text channel that could reinterpret it.
+
+Output is delivered two ways on purpose, because the two capability seams
+disagree about its shape. Collected process output is **pulled**: the host asks
+for an offset and the node keeps the bounded window, matching the seam's
+synchronous `readFrom(fromByte)` reader. Terminal output is **pushed**: the seam
+exposes it as a `Readable`, so frames are forwarded as they arrive and the stream
+is ended by an explicit `op.payloadEnd` when the terminal exits — which is also
+why a `proc.spawn` with piped streams replies with `payloadContinues` rather than
+letting its reply end the stream.
 
 The frame vocabulary mirrors the browser Remote mux dsh already has
 (`open` / `data` / `end` / `error` / `cancel`, one `ready` opening item, a
@@ -295,14 +326,21 @@ packages/node/                      # the published package: @shaowenchen/dsh-no
 │   ├── index.ts                    # NodeRegistry (ctx.nodeRegistry): channel, identity, heartbeat
 │   ├── agent.ts                    # NodeAgent: the dialling process, on the remote machine
 │   ├── fs-ops.ts                   # filesystem semantics, executed on the node
+│   ├── proc-ops.ts                 # process trees, escalation, bounded output collection
+│   ├── tty-ops.ts                  # PTY terminals, loaded lazily (node-pty is optional)
 │   └── agent-cli.ts                # the `dsh-node` entry point
 ├── tests/
-│   └── fail-closed.spec.ts
+│   ├── fail-closed.spec.ts         # the safety property, over real sockets
+│   └── proc-tty.spec.ts            # process trees and real PTYs, end to end
 └── cordis.patch.yml                # the bundle patch a dsh deployment mounts
 
 packages/fs-node/                   # @shaowenchen/dsh-fs-node
 ├── src/index.ts                    # NodeFileSystem: implements ctx.fs over the channel
 └── tests/parity.spec.ts            # checked against the real dsh-fs-local
+
+packages/subprocess-node/           # @shaowenchen/dsh-subprocess-node
+├── src/index.ts                    # NodeSubprocessRuntime: implements ctx.subprocess
+└── tests/parity.spec.ts            # checked against the real dsh-subprocess-local
 
 scripts/install-host.sh             # dsh-host installer, fetched from GitHub (no clone)
 scripts/install-node.sh             # remote-machine agent installer, same idea
@@ -310,9 +348,9 @@ scripts/install-node.sh             # remote-machine agent installer, same idea
 SECURITY.md · CONTRIBUTING.md · CHANGELOG.md
 ```
 
-`dsh-subprocess-node` — the adapter that maps `ctx.subprocess` onto this
-protocol, so commands, terminals, and language servers also run on the node — is
-the next step and is specified in the design document.
+With all three packages mounted, the two capability seams that define an
+execution world both point at the remote machine, which is the goal the design
+document sets out.
 
 ## Design document
 

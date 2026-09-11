@@ -8,9 +8,46 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The `proc.*` family** — ordinary processes, executed on the node over
+  `node:child_process`. `proc.resolve`, `proc.spawn`, `proc.read`,
+  `proc.signal`, and `proc.wait` are implemented. Processes are spawned
+  `detached` and signalled as a **process group**, so termination reaches the
+  whole tree rather than leaving helpers behind; `SIGTERM`→`graceMs`→`SIGKILL`
+  escalation is the only termination verb.
+- **The `tty.*` family** — real PTYs on the node, via `node-pty`. `tty.open`,
+  `tty.write`, `tty.resize`, `tty.signal`, `tty.inspect`, `tty.wait`, and
+  `tty.close` are implemented. `tty.*` is advertised **only when a PTY substrate
+  loads**, so a machine without a usable native build reports those operations as
+  unimplemented instead of failing at the first terminal.
+- **`@shaowenchen/dsh-subprocess-node`** — the adapter that serves
+  `ctx.subprocess` from the node, so commands, terminals, and language servers
+  run on the remote machine. Its behaviour is verified against the real
+  `@deepseek-ai/dsh-subprocess-local` over the same operations, including process
+  trees, output caps, piped streams, and real terminals.
+- **Bounded collected output with spill recovery.** A collected stream keeps an
+  in-memory window trimmed to EXACTLY the cap, reports when it dropped the head,
+  and optionally keeps the complete stream in a spill file. Trimming matches the
+  local backend byte for byte so a caller cannot tell which machine ran the
+  process.
+- **Payload channel tagging.** Binary frames now carry the channel they belong
+  to (`stdout` / `stderr` / `stdin` / `opaque`) after the stream id, so a
+  process's two output streams are distinguishable without consulting the
+  operation that opened the stream.
+- **`op.payloadEnd`** and the `payloadContinues` flag on `op.end`, so a stream
+  whose output outlives its opening reply — a terminal, or a process with piped
+  stdio — ends its reader on the real event rather than on a timeout.
 - Repository scaffolding: `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, and
   GitHub issue/PR templates.
 - A package-level README so the npm tarball documents itself.
+
+### Changed
+
+- `NodeRegistry.invoke` accepts an `AbortSignal`, so a caller can stop waiting on
+  a remote operation. The cancellation deliberately does not reach the node:
+  abandoning a read must not kill the process being watched.
+- `invoke` no longer drains the payload iterator. It awaits the result alone,
+  which is what a unary caller wants and what keeps a `proc.spawn` with a piped
+  stream from blocking until that stream closes.
 
 ### Fixed
 
@@ -21,6 +58,16 @@ to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   README and `scripts/install-host.sh`. The install script previously implied
   that any non-empty credential was accepted, when in fact the `credential`
   field is never read by the registry at all.
+- `proc.wait` and `tty.wait` no longer discard the handle they waited on.
+  Collected output stays readable after exit — the seam's batch shape is "await
+  the outcome, then read everything" — so a waited process must remain
+  addressable.
+
+### Removed
+
+- `proc.write` from the protocol vocabulary. A process's stdin is written on the
+  stream that spawned it, not through a separate operation, and the operation was
+  never implemented.
 
 ## [0.1.0] — 2026-09-11
 
@@ -100,11 +147,13 @@ against a real HTTP server, real upgrades, and real sockets.
 
 ### Not implemented
 
-`proc.*` and `tty.*` are declared in the protocol vocabulary but not
-implemented, and there is no `dsh-subprocess-node` yet — so commands, terminals,
-and language servers still run wherever the subprocess provider points. The agent
-advertises only what it implements, so a host refuses those operations early with
-`unsupported` rather than hanging on them.
+`proc.*` and `tty.*` were declared in the protocol vocabulary but not
+implemented in this release, and there was no `dsh-subprocess-node` yet — so
+commands, terminals, and language servers still ran wherever the subprocess
+provider pointed. The agent advertised only what it implemented, so a host
+refused those operations early with `unsupported` rather than hanging on them.
+
+All three families landed in [Unreleased] above.
 
 [Unreleased]: https://github.com/shaowenchen/deepseek-harness-remote-node/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/shaowenchen/deepseek-harness-remote-node/releases/tag/v0.1.0

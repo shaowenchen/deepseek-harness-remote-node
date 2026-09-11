@@ -97,9 +97,11 @@ See [SECURITY.md](https://github.com/shaowenchen/deepseek-harness-remote-node/bl
 
 ## Status
 
-**Filesystem only.** `ctx.subprocess` is not backed by a node yet, so commands,
-terminals, and language servers still run wherever the subprocess provider
-points. `dsh-subprocess-node` is the next step.
+**Complete.** The other half of the execution world —
+[`dsh-subprocess-node`](https://www.npmjs.com/package/@shaowenchen/dsh-subprocess-node)
+— backs `ctx.subprocess` from the same node, so commands, terminals, and
+language servers run there too. Mount both and the two seams describe one
+machine.
 
 `streamText` currently returns the whole file as a single chunk: the node
 returns the text in one result and the adapter yields it once. The seam's
