@@ -20,7 +20,7 @@
  */
 
 import { hostname, platform, arch, homedir } from 'node:os'
-import { stat } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import { WebSocket } from 'ws'
 import {
   NODE_PROTOCOL_VERSION,
@@ -574,9 +574,39 @@ export class NodeAgent {
   }
 
   /** Connect, and keep reconnecting until {@link stop}. */
+  /**
+   * Ensure the execution world's working directory exists, then connect.
+   *
+   * This runs HERE because this process is the one ON the node: the path is in
+   * the node's namespace, so this is the only side that can create it. Telling
+   * an operator to `mkdir` it by hand is a step that silently costs a whole
+   * session when missed — a missing working directory is not a degraded mode,
+   * the first command fails with ENOENT, and the error names the program
+   * rather than the directory.
+   *
+   * `mkdir -p` semantics, and a failure is a warning rather than a refusal: an
+   * existing directory this user cannot stat (a permissions quirk, a stale
+   * mount) may still work, and refusing to start would turn a maybe into a
+   * definite. The spawn-time fallback in `usableCwd` is the real safety net.
+   */
   start(): void {
     this.stopping = false
-    this.connect()
+    void this.ensureWorkingDirectory().finally(() => { this.connect() })
+  }
+
+  /** @internal Create `opts.cwd` when it is absent. Never throws. */
+  private async ensureWorkingDirectory(): Promise<void> {
+    try {
+      if (await isDirectory(this.opts.cwd)) return
+      await mkdir(this.opts.cwd, { recursive: true })
+      this.log(`created working directory ${this.opts.cwd}`)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      this.log(
+        `cannot create working directory ${this.opts.cwd}: ${detail} `
+        + '— spawning there will fail; pass --cwd pointing at a path you can write',
+      )
+    }
   }
 
   /** Stop reconnecting and close the current socket. */

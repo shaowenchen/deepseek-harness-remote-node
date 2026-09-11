@@ -113,26 +113,20 @@ the plugin config below into `$DSH_HOME/profiles/web/cordis.patch.yml`. It works
 inside the `deepseek-harness-web` container too, where no package manager exists.
 Skip to [On the node](#on-the-node) if you do not want to read the config.
 
-**The working directory is the one setting you must think about.** `--cwd` is a
-path **on the node** — in the node's namespace, not this machine's. It defaults
-to `$HOME/.deepseek-harness-remote-node` on the node, which is right for most
+**`--cwd` is a path on the NODE**, in the node's namespace — not this machine's.
+It defaults to `$HOME/.deepseek-harness-remote-node`, which is right for most
 setups; pass it when the work belongs somewhere else, such as a mounted volume:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-host.sh \
-  | sh -s -- --cwd /mnt/data/project
+  | sh -s -- --cwd /data/.deepseek-harness-remote-node
 ```
 
-It must **already exist on the node**. A missing working directory is not a
-degraded mode — the first command fails outright with `ENOENT` — so create it
-there before connecting:
+It is **created if missing** — including parents — by the agent on the node, so
+there is nothing to prepare by hand. A path you cannot write is reported at
+startup rather than discovered on the first command.
 
-```sh
-# on the node
-mkdir -p ~/.deepseek-harness-remote-node
-```
-
-Two notes on that default. The leading dot means `ls` and most file pickers hide
+Two notes on the default. The leading dot means `ls` and most file pickers hide
 it, which is intended for a directory the tool owns — `--cwd` takes any path if
 you would rather browse your work. And it is deliberately not `/srv/workspace`,
 which is common in examples but safe nowhere: `/srv` is a Linux convention that
@@ -216,8 +210,14 @@ Run this **on the machine that becomes the execution world**, then connect it:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shaowenchen/deepseek-harness-remote-node/master/scripts/install-node.sh \
   | sh -s -- --bin-dir ~/.local/bin
+```
 
-dsh-node --url ws://<host>:3080/node/v1 --credential <token> --cwd ~/.deepseek-harness-remote-node
+Then connect it. `wss://` here is the host's public address, not a local port:
+
+```sh
+dsh-node --url wss://<host>/node/v1 \
+  --credential <the value install-host.sh printed> \
+  --cwd ~/.deepseek-harness-remote-node
 ```
 
 It logs `registered as <nodeId> (generation 1, cwd ...)` when connected, and

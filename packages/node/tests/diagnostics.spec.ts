@@ -17,6 +17,8 @@ import { strict as assert } from 'node:assert'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { createServer, type Server } from 'node:http'
 import { spawn } from 'node:child_process'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Socket } from 'node:net'
 import { NodeAgent } from '../src/agent.ts'
@@ -89,6 +91,73 @@ function runAgent(handler: (socket: Socket, status: number) => void): {
     },
   }
 }
+
+describe('the working directory is created where the work happens', () => {
+  it('creates the configured cwd on startup, including missing parents', async () => {
+    // A missing working directory is not a degraded mode: the first command
+    // fails with ENOENT, and Node reports that as `spawn <program> ENOENT` —
+    // naming the EXECUTABLE, not the directory. Telling an operator to mkdir it
+    // by hand is a step that silently costs a whole session when missed, so the
+    // agent does it. This asserts the effect, not the log line.
+    const base = await mkdtemp(join(tmpdir(), 'dsh-cwd-'))
+    const target = join(base, 'deep', 'nested')
+    const lines: string[] = []
+    const agent = new NodeAgent({
+      url: 'ws://127.0.0.1:1/node/v1', // unreachable: creation must not wait on it
+      credential: 'x',
+      cwd: target,
+      reconnectMinMs: 100_000,
+      log: (m) => { lines.push(m) },
+    })
+    agent.start()
+    try {
+      const deadline = Date.now() + 5000
+      while (Date.now() < deadline) {
+        try {
+          await stat(target)
+          break
+        } catch {
+          await new Promise((r) => { setTimeout(r, 25) })
+        }
+      }
+      const info = await stat(target)
+      assert.ok(info.isDirectory(), 'the configured cwd must exist as a directory')
+      assert.ok(
+        lines.some((l) => l.includes('created working directory')),
+        `expected the creation to be reported.\nGot:\n${lines.map((l) => `  ${l}`).join('\n')}`,
+      )
+    } finally {
+      agent.stop()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves an existing directory alone', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-cwd-'))
+    const marker = join(base, 'keep-me.txt')
+    await writeFile(marker, 'mine\n')
+    const lines: string[] = []
+    const agent = new NodeAgent({
+      url: 'ws://127.0.0.1:1/node/v1',
+      credential: 'x',
+      cwd: base,
+      reconnectMinMs: 100_000,
+      log: (m) => { lines.push(m) },
+    })
+    agent.start()
+    try {
+      await new Promise((r) => { setTimeout(r, 300) })
+      assert.equal(await readFile(marker, 'utf8'), 'mine\n', 'contents must be untouched')
+      assert.ok(
+        !lines.some((l) => l.includes('created working directory')),
+        'an existing directory must not be reported as created',
+      )
+    } finally {
+      agent.stop()
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('connection diagnostics: a failure says what went wrong', () => {
   it('names the HTTP status and where to look, instead of only "disconnected"', async () => {

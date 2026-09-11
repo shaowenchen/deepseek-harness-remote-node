@@ -204,8 +204,10 @@ say "      ok"
 # broken rather than merely empty — and the user would find out from the first
 # command the agent tried to run.
 #
-# Only the DEFAULT is created. A caller who passes --cwd has named a directory
-# they own, and creating it for them would be guessing about their intent.
+# The agent also creates its working directory at startup, for whatever --cwd it
+# was given, so this step is a convenience rather than the only guard. It stays
+# because the default is what most deployments use and creating it here means the
+# directory is owned by the account that runs the install.
 say "[4/5] creating the default working directory"
 if [ -d "$HOME/.deepseek-harness-remote-node" ]; then
   say "      already exists — left untouched"
@@ -238,18 +240,21 @@ say ""
 say "  Use the scheme the host is actually reachable on. A host behind TLS needs"
 say "  wss://, and the URL is the public one — not a local port:"
 say ""
-say "    dsh-node --url wss://<host>/node/v1 --credential <token> --cwd \$HOME/.deepseek-harness-remote-node"
+say "    dsh-node --url wss://<host>/node/v1 \\"
+say "      --credential <the value install-host.sh printed> \\"
+say "      --cwd \$HOME/.deepseek-harness-remote-node"
 say ""
 say "  ws:// to an HTTPS host is answered with a redirect, and a redirect is not"
 say "  followed — it fails with 'HTTP 301 redirect' rather than connecting."
 say ""
-say "  \$HOME/.deepseek-harness-remote-node was created by this installer and is"
-say "  what the host defaults to. The working directory must EXIST: a missing one"
-say "  is not a degraded mode — the first command fails with ENOENT. Point --cwd"
-say "  at a directory you already have instead if you prefer:"
+say "  --cwd is in THIS machine's namespace, and is created if it is missing"
+say "  (including parents) when the agent starts, so there is nothing to prepare"
+say "  by hand. A path you cannot write is reported at startup rather than"
+say "  discovered on the first command. Point it somewhere else when the work"
+say "  belongs there:"
 say ""
-say "    dsh-node --url ... --cwd /mnt/data/project"
+say "    dsh-node --url ... --cwd /data/.deepseek-harness-remote-node"
 say ""
-say "  Note: the node channel does not verify credentials yet. The credential is"
-say "  sent by the agent but never checked by the registry, so do not expose"
-say "  /node/v1 beyond a trusted network. See SECURITY.md."
+say "  The host verifies the credential when one is configured there, which"
+say "  install-host.sh does by default. See SECURITY.md before exposing /node/v1"
+say "  beyond a trusted network."
